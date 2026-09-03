@@ -115,6 +115,9 @@ function stripDefaultPlotRatesForV2Export(target: Record<string, any>): void {
       delete target[field];
     }
   }
+  if (target.directRecallWhenBelowThreshold === false) {
+    delete target.directRecallWhenBelowThreshold;
+  }
 }
 
 function normalizeImportedPresetPayloads(parsed: unknown): Record<string, any>[] {

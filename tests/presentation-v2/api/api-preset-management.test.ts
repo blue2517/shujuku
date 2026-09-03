@@ -75,7 +75,7 @@ describe('api preset draft helpers', () => {
     expect(preset.apiConfig.temperature).toBe(1);
   });
 
-  it('三个附加参数字段在 draft 转换中保留', () => {
+  it('三个附加参数字段和提示词后处理在 draft 转换中保留', () => {
     const draft = apiPresetDraftFromPreset({
       name: 'extra',
       apiMode: 'custom',
@@ -89,6 +89,7 @@ describe('api preset draft helpers', () => {
         bodyParams: 'top_k: 50',
         excludeBodyParams: 'top_p',
         requestHeaders: 'X-Custom: val',
+        postProcessing: 'strict',
       },
       tavernProfile: '',
     });
@@ -96,14 +97,16 @@ describe('api preset draft helpers', () => {
     expect(draft.bodyParams).toBe('top_k: 50');
     expect(draft.excludeBodyParams).toBe('top_p');
     expect(draft.requestHeaders).toBe('X-Custom: val');
+    expect(draft.postProcessing).toBe('strict');
 
     const preset = apiPresetFromDraft(draft);
     expect(preset.apiConfig.bodyParams).toBe('top_k: 50');
     expect(preset.apiConfig.excludeBodyParams).toBe('top_p');
     expect(preset.apiConfig.requestHeaders).toBe('X-Custom: val');
+    expect(preset.apiConfig.postProcessing).toBe('strict');
   });
 
-  it('旧预设缺失附加参数字段时归一为空字符串', () => {
+  it('旧预设缺失附加参数字段时归一为空字符串，后处理默认为 none', () => {
     const draft = apiPresetDraftFromPreset({
       name: 'old',
       apiMode: 'custom',
@@ -121,5 +124,6 @@ describe('api preset draft helpers', () => {
     expect(draft.bodyParams).toBe('');
     expect(draft.excludeBodyParams).toBe('');
     expect(draft.requestHeaders).toBe('');
+    expect(draft.postProcessing).toBe('none');
   });
 });

@@ -47,6 +47,17 @@
         />
       </AcuFormRow>
     </div>
+    <div class="acu-v2-plot-match-fields__toggle-row">
+      <AcuFormRow
+        label="纪要不足时本地直出"
+        hint="开启后，当大纲/纪要条数 ≤ zhaohui 时跳过 AI 推进请求，直接提取全部索引编码注入最终提示词，降低延迟并节省 Token。"
+      >
+        <AcuToggle
+          :model-value="!!directRecallWhenBelowThreshold"
+          @update:model-value="emit('update-direct-recall', $event)"
+        />
+      </AcuFormRow>
+    </div>
   </fieldset>
 </template>
 
@@ -55,6 +66,7 @@ import type { PlotRateField } from "../composables/usePlotPresetManagement";
 import AcuFormRow from "./_lib/AcuFormRow.vue";
 import AcuInput from "./_lib/AcuInput.vue";
 import AcuText from "./_lib/AcuText.vue";
+import AcuToggle from "./_lib/AcuToggle.vue";
 
 defineProps<{
   rateMain: number;
@@ -62,10 +74,12 @@ defineProps<{
   rateErotic: number;
   rateCuckold: number;
   recallCount: number;
+  directRecallWhenBelowThreshold?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: "update-rate", field: PlotRateField, value: number): void;
+  (e: "update-direct-recall", value: boolean): void;
 }>();
 
 function emitRate(field: PlotRateField, value: number): void {
@@ -99,5 +113,9 @@ function emitRate(field: PlotRateField, value: number): void {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
+}
+
+.acu-v2-plot-match-fields__toggle-row {
+  margin-top: 4px;
 }
 </style>

@@ -8,6 +8,8 @@
 export {
     formatOutlineTableForPlot_ACU,
     formatSummaryIndexForPlot_ACU,
+    extractAllAmCodesFromSummaryTable_ACU,
+    buildDirectRecallTaskResponse_ACU,
 } from './plot-data-format';
 
 // 预设加载 + 历史读写

@@ -76,7 +76,7 @@ export function buildCustomApiRequestBody_ACU(
     reasoning_effort: 'medium',
     enable_web_search: false,
     request_images: false,
-    custom_prompt_post_processing: 'strict',
+    custom_prompt_post_processing: effectiveApiConfig.postProcessing || effectiveApiConfig.custom_prompt_post_processing || 'none',
     reverse_proxy: effectiveApiConfig.url,
     proxy_password: '',
     custom_url: effectiveApiConfig.url,

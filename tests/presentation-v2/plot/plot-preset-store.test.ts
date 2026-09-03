@@ -398,6 +398,25 @@ describe('usePlotPresetStore', () => {
     expect(parsed[0].rateCuckold).toBeUndefined();
   });
 
+  it('exportPresetAsJson 仅在 directRecallWhenBelowThreshold 为 true 时导出该字段', async () => {
+    const settings = createSettings();
+    Object.assign(settings.plotSettings.promptPresets[0], {
+      directRecallWhenBelowThreshold: true,
+    });
+    const { store } = await importStore(settings);
+    store.refreshFromSettings();
+
+    const parsed = JSON.parse(store.exportPresetAsJson('记忆召回')!);
+    expect(parsed[0].directRecallWhenBelowThreshold).toBe(true);
+
+    Object.assign(settings.plotSettings.promptPresets[0], {
+      directRecallWhenBelowThreshold: false,
+    });
+    store.refreshFromSettings();
+    const parsedDefault = JSON.parse(store.exportPresetAsJson('记忆召回')!);
+    expect(parsedDefault[0].directRecallWhenBelowThreshold).toBeUndefined();
+  });
+
   it('importPresetFromJson 非法 JSON 返回 null', async () => {
     const settings = createSettings();
     const { store } = await importStore(settings);

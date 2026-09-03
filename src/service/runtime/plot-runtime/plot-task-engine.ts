@@ -19,7 +19,7 @@ import { ensurePlotTasksCompat_ACU, getPlotPromptContentByIdFromSettings_ACU, no
 import { parseRandomTags_ACU, replaceRandomVariables_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from '../template-vars';
 import { applyContextTagFilters_ACU, applyExcludeRulesToText_ACU } from '../helpers-context-tags';
 import { mergeAllIndependentTables_ACU } from '../helpers-data-merge';
-import { formatTableDataForLLM_ACU, formatOutlineTableForPlot_ACU, formatSummaryIndexForPlot_ACU, getSummaryIndexContentForPlot_ACU } from './plot-data-format';
+import { formatTableDataForLLM_ACU, formatOutlineTableForPlot_ACU, formatSummaryIndexForPlot_ACU, getSummaryIndexContentForPlot_ACU, extractAllAmCodesFromSummaryTable_ACU, buildDirectRecallTaskResponse_ACU } from './plot-data-format';
 import { getNormalizedPlotMessageRole_ACU, tryRenderPlotTemplateWithEjs_ACU, renderPlotTaskContentWithIsolatedVariables_ACU, extractPlotTagsFromResponse_ACU, getPlotPlaceholderTagNames_ACU, buildPlotTagMapFromText_ACU, replacePlotTagPlaceholders_ACU, buildTaskWorldbookTriggerText_ACU, sortPlotTaskResults_ACU, aggregatePlotTaskTags_ACU, buildPlotSaveContentFromTaskResults_ACU, buildFinalPlotInjectionMessage_ACU } from './plot-tag-utils';
 import { flushPlotPendingSave_ACU, getPlotFromHistory_ACU, savePlotToLatestMessage_ACU } from './plot-history-preset';
 import { abortableDelay } from '../../../shared/abortable-delay';
@@ -505,6 +505,40 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
       sharedContext?.plotSettings?.loopSettings?.maxRetries ?? DEFAULT_PLOT_SETTINGS_ACU.loopSettings?.maxRetries ?? 3,
     );
     const minLength = normalizeNonNegativeInteger_ACU(normalizedTask.minLength, 0);
+
+    const shouldDirectRecall = sharedContext?.plotSettings?.directRecallWhenBelowThreshold === true
+      && (
+        String(normalizedTask.extractTags || '').toLowerCase().includes('recall')
+        || String(normalizedTask.extractInjectTags || '').toLowerCase().includes('recall')
+      );
+
+    if (shouldDirectRecall) {
+      const summaryInfo = extractAllAmCodesFromSummaryTable_ACU(sharedContext.allTablesJson);
+      const recallCount = normalizePositiveInteger_ACU(sharedContext?.plotSettings?.recallCount, 20);
+      if (summaryInfo.totalCount <= recallCount) {
+        logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 当前纪要条数(${summaryInfo.totalCount}) <= zhaohui(${recallCount})，命中本地直出规则，跳过 AI 请求。`);
+        const rawResponse = buildDirectRecallTaskResponse_ACU(summaryInfo.codes, normalizedTask);
+        const { tagNames, extractedTags, injectedFragments, injectOnlyTags, injectOnlyFragments, injectOnlyTagNames } = extractPlotTagsFromResponse_ACU(
+          rawResponse,
+          normalizedTask.extractTags,
+          normalizedTask.extractInjectTags,
+        );
+        return {
+          taskId: normalizedTask.id,
+          taskName: taskLabel,
+          success: true,
+          rawResponse,
+          extractedTags,
+          injectedFragments,
+          injectOnlyTags,
+          injectOnlyFragments,
+          injectOnlyTagNames,
+          error: null as string | null,
+          stage: taskStage,
+          order: normalizedTask.order ?? 0,
+        };
+      }
+    }
 
     // 任务级世界书计算：基于当前任务实际使用的 {{tag}} 注入内容 + 本轮上下文触发，
     // 而不是固定使用整段上一轮剧情内容。

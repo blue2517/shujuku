@@ -87,6 +87,7 @@
       :current-task-api-override="currentTaskApiOverride"
       :show-advanced-rates="devOptions.plotAdvanced.value"
       :rates="management.draftRates"
+      :direct-recall-when-below-threshold="management.directRecallWhenBelowThreshold.value"
       :before-close="() => management.confirmIfDirty()"
       @close="management.closeDrawer"
       @back="management.backToManage"
@@ -101,6 +102,7 @@
       @update-context-exclude-rules="management.setContextExcludeRules"
       @update-task-api-override="onTaskApiOverride"
       @update-rate="management.setDraftRate"
+      @update-direct-recall="management.setDirectRecall"
     />
   </AcuPanel>
 </template>

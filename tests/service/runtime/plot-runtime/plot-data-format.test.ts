@@ -33,6 +33,8 @@ import {
   formatOutlineTableForPlot_ACU,
   formatSummaryIndexForPlot_ACU,
   getSummaryIndexContentForPlot_ACU,
+  extractAllAmCodesFromSummaryTable_ACU,
+  buildDirectRecallTaskResponse_ACU,
 } from '../../../../src/service/runtime/plot-runtime/plot-data-format';
 
 const mockTables = {
@@ -145,5 +147,74 @@ describe('getSummaryIndexContentForPlot_ACU', () => {
       plotWorldbookConfig: { source: 'character' },
     });
     expect(result).toBe('纪要内容');
+  });
+});
+
+describe('extractAllAmCodesFromSummaryTable_ACU', () => {
+  it('从纪要表中提取有效 AM 编码', () => {
+    const data = {
+      sheet_0: {
+        name: '纪要表',
+        content: [
+          ['row_id', '时间跨度', '地点', '纪要', '概览', '编码索引'],
+          ['1', '2024-01-01 10:00 ~ 11:00', '王城', '事件1', '概览1', 'AM0001'],
+          ['2', '2024-01-01 11:00 ~ 12:00', '王城', '事件2', '概览2', 'AM0002'],
+        ],
+      },
+    };
+    const result = extractAllAmCodesFromSummaryTable_ACU(data);
+    expect(result.foundTable).toBe(true);
+    expect(result.totalCount).toBe(2);
+    expect(result.codes).toEqual(['AM0001', 'AM0002']);
+  });
+
+  it('表格为空或只有表头时返回空列表', () => {
+    const data = {
+      sheet_0: {
+        name: '纪要表',
+        content: [['row_id', '时间跨度', '地点', '纪要', '概览', '编码索引']],
+      },
+    };
+    const result = extractAllAmCodesFromSummaryTable_ACU(data);
+    expect(result.foundTable).toBe(true);
+    expect(result.totalCount).toBe(0);
+    expect(result.codes).toEqual([]);
+  });
+
+  it('空表格数据对象返回 0 条', () => {
+    expect(extractAllAmCodesFromSummaryTable_ACU(null)).toEqual({ totalCount: 0, codes: [], foundTable: false });
+    expect(extractAllAmCodesFromSummaryTable_ACU({})).toEqual({ totalCount: 0, codes: [], foundTable: false });
+  });
+
+  it('未找到纪要表但其他表包含 AM 编码列时能自动识别', () => {
+    const data = {
+      sheet_custom: {
+        name: '自定义事件记录',
+        content: [
+          ['row_id', '事件描述', 'code_index'],
+          ['1', '第一幕', 'AM0010'],
+          ['2', '第二幕', 'AM0011'],
+        ],
+      },
+    };
+    const result = extractAllAmCodesFromSummaryTable_ACU(data);
+    expect(result.foundTable).toBe(true);
+    expect(result.totalCount).toBe(2);
+    expect(result.codes).toEqual(['AM0010', 'AM0011']);
+  });
+});
+
+describe('buildDirectRecallTaskResponse_ACU', () => {
+  it('构建标准 direct recall 响应文本', () => {
+    const codes = ['AM0001', 'AM0002', 'AM0003'];
+    const res = buildDirectRecallTaskResponse_ACU(codes, { extractTags: 'recall,supplement' });
+    expect(res).toContain('<recall>\nAM0001, AM0002, AM0003\n</recall>');
+    expect(res).toContain('<thought>');
+    expect(res).toContain('<supplement>');
+  });
+
+  it('空编码列表时输出空 recall 块', () => {
+    const res = buildDirectRecallTaskResponse_ACU([], { extractTags: 'recall' });
+    expect(res).toContain('<recall>\n\n</recall>');
   });
 });
