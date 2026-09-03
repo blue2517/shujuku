@@ -125,6 +125,7 @@ export function usePlotPresetManagement() {
   const draftMeta = reactive<DraftMeta>(emptyDraftMeta());
   const contextRules = reactive<DraftContextRules>(emptyContextRules());
   const draftRates = reactive<PlotRateDraft>(emptyDraftRates());
+  const directRecallWhenBelowThreshold = ref<boolean>(false);
   const draftRaw = ref<Record<string, any>>(defaultRawPreset());
   const error = ref<string>('');
   const initialSnapshot = ref<string>('');
@@ -160,6 +161,7 @@ export function usePlotPresetManagement() {
       meta: draftMeta,
       contextRules,
       rates: draftRates,
+      directRecall: directRecallWhenBelowThreshold.value,
       tasks: taskEditing.tasks.value,
       directive: taskEditing.finalDirective.value,
     });
@@ -183,6 +185,7 @@ export function usePlotPresetManagement() {
     Object.assign(draftMeta, emptyDraftMeta());
     Object.assign(contextRules, emptyContextRules());
     Object.assign(draftRates, emptyDraftRates());
+    directRecallWhenBelowThreshold.value = false;
     draftRaw.value = defaultRawPreset();
     originalName.value = '';
     error.value = '';
@@ -205,6 +208,7 @@ export function usePlotPresetManagement() {
     contextRules.extractRules = normalizeRulePairs(raw.contextExtractRules, raw.contextExtractTags || '', 'extract');
     contextRules.excludeRules = normalizeRulePairs(raw.contextExcludeRules, raw.contextExcludeTags || '', 'exclude');
     Object.assign(draftRates, readDraftRates(raw));
+    directRecallWhenBelowThreshold.value = raw.directRecallWhenBelowThreshold === true;
     taskEditing.loadFromRaw(raw.plotTasks || [], raw.finalSystemDirective || '');
     error.value = '';
     drawerView.value = 'create';
@@ -222,6 +226,7 @@ export function usePlotPresetManagement() {
     contextRules.extractRules = normalizeRulePairs(target.raw?.contextExtractRules, target.raw?.contextExtractTags || '', 'extract');
     contextRules.excludeRules = normalizeRulePairs(target.raw?.contextExcludeRules, target.raw?.contextExcludeTags || '', 'exclude');
     Object.assign(draftRates, readDraftRates(target.raw || null));
+    directRecallWhenBelowThreshold.value = target.raw?.directRecallWhenBelowThreshold === true;
     taskEditing.loadFromRaw(target.raw?.plotTasks || [], target.raw?.finalSystemDirective || '');
     error.value = '';
     drawerView.value = 'edit';
@@ -282,6 +287,7 @@ export function usePlotPresetManagement() {
     merged.contextExtractRules = rulesForSave(contextRules.extractRules, 'extract');
     merged.contextExcludeRules = rulesForSave(contextRules.excludeRules, 'exclude');
     writeDraftRates(merged, draftRates);
+    merged.directRecallWhenBelowThreshold = directRecallWhenBelowThreshold.value;
     delete merged.contextExtractTags;
     delete merged.contextExcludeTags;
     const ok = store.savePreset({ name: merged.name, raw: merged }, originalName.value);
@@ -293,6 +299,10 @@ export function usePlotPresetManagement() {
     resetDraft();
     toast.success('剧情推进预设已保存。');
     return true;
+  }
+
+  function setDirectRecall(value: boolean): void {
+    directRecallWhenBelowThreshold.value = !!value;
   }
 
   function deletePreset(name: string): boolean {
@@ -328,11 +338,13 @@ export function usePlotPresetManagement() {
     draftRaw,
     contextRules,
     draftRates,
+    directRecallWhenBelowThreshold,
     presetMeta,
     taskEditing,
     setContextExtractRules,
     setContextExcludeRules,
     setDraftRate,
+    setDirectRecall,
     openManage,
     openCreate,
     openEdit,

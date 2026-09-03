@@ -135,6 +135,16 @@
         v-if="activeConnectionMode === 'custom'"
         class="acu-api-config-panel__editor-section"
       >
+        <AcuFormRow
+          label="提示词后处理"
+          hint="控制发送给后端时是否强制改写消息角色。设为 none 可保留全部中间 SYSTEM 提示词段落。"
+        >
+          <AcuSelect
+            :options="postProcessingOptions"
+            :model-value="activeDraft.postProcessing || 'none'"
+            @update:model-value="activeDraft.postProcessing = $event"
+          />
+        </AcuFormRow>
         <AcuFormRow label="附加主体参数" hint="SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。">
           <AcuTextarea
             v-model="activeDraft.bodyParams"
@@ -239,6 +249,11 @@ const connectionModeOptions: AcuSegmentedOption[] = [
   { value: "main", label: "酒馆主 API" },
   { value: "custom", label: "自定义" },
   { value: "tavern", label: "酒馆预设" },
+];
+const postProcessingOptions: AcuSelectOption[] = [
+  { value: "none", label: "原样透传 (none) — 推荐，保留多段系统提示词" },
+  { value: "strict", label: "严格兼容 (strict) — 仅首段系统词，中间降级为用户词并合并" },
+  { value: "default", label: "酒馆默认 (default) — 遵循酒馆内置规则" },
 ];
 const modelSelectOptions = computed<AcuSelectOption[]>(() =>
   store.modelOptions.map((m) => ({ value: m, label: m })),

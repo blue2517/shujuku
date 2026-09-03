@@ -13,6 +13,7 @@ import { logWarn_ACU } from '../../shared/utils';
 // ═══ 类型 ═══
 
 export type ApiPresetApiMode_ACU = 'custom' | 'tavern';
+export type PromptPostProcessingType_ACU = 'none' | 'strict' | 'default';
 
 export interface ApiPresetApiConfig_ACU {
   url: string;
@@ -25,6 +26,7 @@ export interface ApiPresetApiConfig_ACU {
   bodyParams: string;
   excludeBodyParams: string;
   requestHeaders: string;
+  postProcessing?: PromptPostProcessingType_ACU | string;
 }
 
 export interface ApiPreset_ACU {
@@ -59,6 +61,8 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const maxTokens = Number(source.max_tokens ?? source.maxTokens ?? 60000);
   const temperature = Number(source.temperature ?? 1);
+  const rawPostProc = String(source.postProcessing ?? source.custom_prompt_post_processing ?? 'none').trim().toLowerCase();
+  const postProcessing = ['none', 'strict', 'default'].includes(rawPostProc) ? rawPostProc : 'none';
   // [修复] 保留源对象中所有非白名单字段（如 topP/top_p/frequency_penalty），
   // 避免对运行中 apiConfig 的归一化破坏调用方依赖的透传字段。
   return {
@@ -72,9 +76,10 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
     bodyParams: typeof source.bodyParams === 'string' ? source.bodyParams : '',
     excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
     requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
+    postProcessing,
     ...Object.fromEntries(
       Object.entries(source).filter(([key]) =>
-        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders'].includes(key)
+        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'postProcessing'].includes(key)
       )
     ),
   };

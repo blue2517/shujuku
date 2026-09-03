@@ -501,6 +501,7 @@ export function applyPlotPresetToSettings_ACU(plotSettings: Record<string, any>,
     plotSettings.rateErotic = normalizedPreset.rateErotic ?? 0;
     plotSettings.rateCuckold = normalizedPreset.rateCuckold ?? 1.0;
     plotSettings.recallCount = normalizedPreset.recallCount ?? 20;
+    plotSettings.directRecallWhenBelowThreshold = normalizedPreset.directRecallWhenBelowThreshold ?? false;
     plotSettings.extractTags = normalizedPreset.extractTags || '';
     plotSettings.contextExtractRules = normalizeExtractRules_ACU(normalizedPreset.contextExtractRules, normalizedPreset.contextExtractTags || '');
     plotSettings.contextExcludeRules = normalizeExcludeRules_ACU(normalizedPreset.contextExcludeRules, normalizedPreset.contextExcludeTags || '');

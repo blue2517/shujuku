@@ -13,6 +13,7 @@ export interface ApiPresetDraft {
   bodyParams: string;
   excludeBodyParams: string;
   requestHeaders: string;
+  postProcessing: string;
 }
 
 /** Effective connection mode — flattens apiMode + useMainApi into 3 user-visible states. */
@@ -50,6 +51,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     bodyParams: '',
     excludeBodyParams: '',
     requestHeaders: '',
+    postProcessing: 'none',
   };
 }
 
@@ -67,6 +69,7 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     bodyParams: preset.apiConfig.bodyParams || '',
     excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
     requestHeaders: preset.apiConfig.requestHeaders || '',
+    postProcessing: preset.apiConfig.postProcessing || 'none',
   };
 }
 
@@ -85,6 +88,7 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       bodyParams: draft.bodyParams || '',
       excludeBodyParams: draft.excludeBodyParams || '',
       requestHeaders: draft.requestHeaders || '',
+      postProcessing: draft.postProcessing || 'none',
     },
   };
 }

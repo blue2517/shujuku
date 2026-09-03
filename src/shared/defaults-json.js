@@ -279,6 +279,7 @@ sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生�
     }
   ],
   "recallCount": 25,
+  "directRecallWhenBelowThreshold": false,
   "extractTags": "recall",
   "extractInjectTags": "",
   "contextExtractRules": [],
@@ -487,6 +488,7 @@ sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生�
   "rateErotic": 0,
   "rateCuckold": 1,
   "recallCount": 20,
+  "directRecallWhenBelowThreshold": false,
   "extractTags": "recall,supplement",
   "extractInjectTags": "",
   "contextExtractTags": "",

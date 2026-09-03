@@ -123,7 +123,9 @@
         :rate-erotic="rates.rateErotic"
         :rate-cuckold="rates.rateCuckold"
         :recall-count="rates.recallCount"
+        :direct-recall-when-below-threshold="directRecallWhenBelowThreshold"
         @update-rate="(field, value) => $emit('update-rate', field, value)"
+        @update-direct-recall="$emit('update-direct-recall', $event)"
       />
 
       <PlotTaskList
@@ -210,6 +212,7 @@ const props = defineProps<{
     rateCuckold: number;
     recallCount: number;
   };
+  directRecallWhenBelowThreshold?: boolean;
   beforeClose?: () => boolean | Promise<boolean>;
 }>();
 
@@ -227,6 +230,7 @@ const emit = defineEmits<{
   (e: "update-context-exclude-rules", rules: PlotContextRulePair[]): void;
   (e: "update-task-api-override", value: string): void;
   (e: "update-rate", field: PlotRateField, value: number): void;
+  (e: "update-direct-recall", value: boolean): void;
 }>();
 
 function onTaskApiOverride(value: string): void {

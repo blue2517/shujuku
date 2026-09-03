@@ -84,6 +84,7 @@ export interface PlotSettings_ACU {
   rateErotic: number;
   rateCuckold: number;
   recallCount: number;
+  directRecallWhenBelowThreshold?: boolean;
   extractTags: string;
   contextExtractTags: string;
   contextExtractRules: unknown[];

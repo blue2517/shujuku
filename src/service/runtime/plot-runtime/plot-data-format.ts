@@ -193,3 +193,85 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine';
       return { success: false, content: '纪要索引：格式化时发生错误。' };
     }
   }
+
+  /** [剧情推进专用] 从本地表格数据中提取全部有效的 AM 编码列表及记录总数 */
+  export function extractAllAmCodesFromSummaryTable_ACU(allTablesJson: any): { totalCount: number; codes: string[]; foundTable: boolean } {
+    if (!allTablesJson || typeof allTablesJson !== 'object') {
+      return { totalCount: 0, codes: [], foundTable: false };
+    }
+    const sheets: any[] = Object.values(allTablesJson).filter((x: any) => x && typeof x === 'object' && x.name && Array.isArray(x.content));
+    if (sheets.length === 0) {
+      return { totalCount: 0, codes: [], foundTable: false };
+    }
+
+    const targetNames = ['纪要表', '总结表', '总体大纲', '大纲表', '纪要'];
+    let summaryTable = sheets.find(s => targetNames.includes(String(s.name || '').trim()));
+
+    if (!summaryTable) {
+      summaryTable = sheets.find(s => {
+        if (!Array.isArray(s.content) || s.content.length === 0) return false;
+        const headers = Array.isArray(s.content[0]) ? s.content[0] : [];
+        return headers.some((h: any) => {
+          const name = String(h ?? '').trim();
+          return name === '编码索引' || name === 'AM编码' || name === 'code_index';
+        });
+      });
+    }
+
+    if (!summaryTable || !Array.isArray(summaryTable.content) || summaryTable.content.length <= 1) {
+      return { totalCount: 0, codes: [], foundTable: !!summaryTable };
+    }
+
+    const headerRow = Array.isArray(summaryTable.content[0]) ? summaryTable.content[0] : [];
+    let indexColIdx = headerRow.findIndex((h: any) => {
+      const name = String(h ?? '').trim();
+      return name === '编码索引' || name === 'AM编码' || name === 'code_index' || name === '编码';
+    });
+
+    if (indexColIdx === -1) {
+      const sampleRows = summaryTable.content.slice(1, 6);
+      for (let c = 0; c < headerRow.length; c++) {
+        if (sampleRows.some((r: any) => Array.isArray(r) && /^AM\d+/i.test(String(r[c] ?? '').trim()))) {
+          indexColIdx = c;
+          break;
+        }
+      }
+    }
+
+    if (indexColIdx === -1) {
+      return { totalCount: 0, codes: [], foundTable: true };
+    }
+
+    const rows = summaryTable.content.slice(1).filter((r: any) => Array.isArray(r));
+    const codes: string[] = [];
+    rows.forEach((row: any) => {
+      const rawVal = row[indexColIdx];
+      if (rawVal !== null && rawVal !== undefined) {
+        const code = String(rawVal).trim();
+        if (code) {
+          codes.push(code);
+        }
+      }
+    });
+
+    return { totalCount: rows.length, codes, foundTable: true };
+  }
+
+  /** [剧情推进专用] 为跳过 AI 调用的直出任务构建模拟响应文本 */
+  export function buildDirectRecallTaskResponse_ACU(codes: string[], task?: Record<string, any>): string {
+    const codeListStr = codes.length > 0 ? codes.join(', ') : '';
+    const extractTags = String(task?.extractTags || 'recall');
+    const tagList = extractTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+
+    let response = `<thought>当前纪要总数(${codes.length})未超过召回阈值，执行本地全量直出召回。</thought>\n`;
+    if (tagList.includes('recall') || tagList.length === 0) {
+      response += `<recall>\n${codeListStr}\n</recall>\n`;
+    }
+    if (tagList.includes('supplement')) {
+      response += `<supplement>\n</supplement>\n`;
+    }
+    if (tagList.includes('match')) {
+      response += `<match>\n</match>\n`;
+    }
+    return response.trim();
+  }

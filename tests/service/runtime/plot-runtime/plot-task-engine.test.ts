@@ -34,6 +34,8 @@ const {
   mockMergeAllIndependentTables,
   mockFormatSummaryIndexForPlot,
   mockFormatOutlineTableForPlot,
+  mockExtractAllAmCodesFromSummaryTable,
+  mockBuildDirectRecallTaskResponse,
   mockGetNormalizedPlotMessageRole,
   mockTryRenderPlotTemplateWithEjs,
   mockRenderPlotTaskContentWithIsolatedVariables,
@@ -121,6 +123,8 @@ const {
     mockMergeAllIndependentTables: vi.fn(),
     mockFormatSummaryIndexForPlot: vi.fn(),
     mockFormatOutlineTableForPlot: vi.fn(),
+    mockExtractAllAmCodesFromSummaryTable: vi.fn((data: any) => ({ totalCount: 1, codes: ['AM0001'], foundTable: true })),
+    mockBuildDirectRecallTaskResponse: vi.fn((codes: string[]) => `<recall>\n${codes.join(', ')}\n</recall>`),
     mockGetNormalizedPlotMessageRole: vi.fn(),
     mockTryRenderPlotTemplateWithEjs: vi.fn(),
     mockRenderPlotTaskContentWithIsolatedVariables: vi.fn(),
@@ -279,6 +283,8 @@ vi.mock('../../../../src/service/runtime/plot-runtime/plot-data-format', () => (
   formatOutlineTableForPlot_ACU: mockFormatOutlineTableForPlot,
   formatSummaryIndexForPlot_ACU: mockFormatSummaryIndexForPlot,
   getSummaryIndexContentForPlot_ACU: vi.fn(),
+  extractAllAmCodesFromSummaryTable_ACU: mockExtractAllAmCodesFromSummaryTable,
+  buildDirectRecallTaskResponse_ACU: mockBuildDirectRecallTaskResponse,
 }));
 
 vi.mock('../../../../src/service/runtime/plot-runtime/plot-tag-utils', () => ({
@@ -2341,5 +2347,104 @@ describe('runPlotTasksRuntime_ACU', () => {
       call[1]?.phase === 'table_worldbook_index'
     ))).toBe(false);
     expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(1);
+  });
+
+  it('当 directRecallWhenBelowThreshold 开启且纪要条数 <= recallCount 时直接本地直出并跳过 AI 请求', async () => {
+    mockExtractAllAmCodesFromSummaryTable.mockReturnValue({
+      totalCount: 3,
+      codes: ['AM0001', 'AM0002', 'AM0003'],
+      foundTable: true,
+    });
+    mockExtractPlotTagsFromResponse.mockReturnValue({
+      tagNames: ['recall'],
+      extractedTags: { recall: 'AM0001, AM0002, AM0003' },
+      injectedFragments: ['<recall>\nAM0001, AM0002, AM0003\n</recall>'],
+      injectOnlyTags: {},
+      injectOnlyFragments: [],
+      injectOnlyTagNames: [],
+    });
+
+    const plotSettings = {
+      directRecallWhenBelowThreshold: true,
+      recallCount: 20,
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '请召回记忆' }],
+        },
+      ],
+    };
+
+    const result = await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockCallApiWithPlotPreset).not.toHaveBeenCalled();
+    expect(result.successfulResults).toHaveLength(1);
+    expect(result.successfulResults[0].extractedTags.recall).toBe('AM0001, AM0002, AM0003');
+    expect(mockLogDebug).toHaveBeenCalledWith(
+      expect.stringContaining('命中本地直出规则，跳过 AI 请求'),
+    );
+  });
+
+  it('当 directRecallWhenBelowThreshold 开启但纪要条数 > recallCount 时正常发起 AI 请求', async () => {
+    mockExtractAllAmCodesFromSummaryTable.mockReturnValue({
+      totalCount: 25,
+      codes: Array.from({ length: 25 }, (_, i) => `AM${String(i + 1).padStart(4, '0')}`),
+      foundTable: true,
+    });
+
+    const plotSettings = {
+      directRecallWhenBelowThreshold: true,
+      recallCount: 20,
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '请召回记忆' }],
+        },
+      ],
+    };
+
+    const result = await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(1);
+    expect(result.successfulResults).toHaveLength(1);
+  });
+
+  it('当 directRecallWhenBelowThreshold 关闭时即使纪要条数 <= recallCount 也正常发起 AI 请求', async () => {
+    mockExtractAllAmCodesFromSummaryTable.mockReturnValue({
+      totalCount: 2,
+      codes: ['AM0001', 'AM0002'],
+      foundTable: true,
+    });
+
+    const plotSettings = {
+      directRecallWhenBelowThreshold: false,
+      recallCount: 20,
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '请召回记忆' }],
+        },
+      ],
+    };
+
+    const result = await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(1);
+    expect(result.successfulResults).toHaveLength(1);
   });
 });
