@@ -4649,6 +4649,13 @@ $CONTENT
             extraIndexPlacement: { ...DEFAULT_EXTRA_INDEX_PLACEMENT_ACU },
             fixedEntryPlacement: { ...fixedDefaults.entry },
             fixedIndexPlacement: { ...fixedDefaults.index },
+            dynamicWindowEnabled: false,
+            dynamicWindowThreshold: 20,
+            dynamicWindowFilterColumn: '',
+            dynamicWindowFilterValue: '',
+            dynamicWindowLatestRows: 2,
+            dynamicWindowKeywordRounds: 5,
+            dynamicWindowPreventDuplicateInsert: false,
         };
     }
     function buildDefaultGlobalInjectionConfig_ACU() {
@@ -49963,6 +49970,33 @@ $CONTENT
                             break;
                         }
                         if (table && table.content && typeof data === 'object') {
+                            // 唯一键防重拦截：仅当 exportConfig 显式开启 dynamicWindowPreventDuplicateInsert 时生效
+                            if (table.exportConfig?.dynamicWindowPreventDuplicateInsert === true) {
+                                const headers = Array.isArray(table.content[0]) ? table.content[0].slice(1) : [];
+                                let keyColIndex = 0;
+                                const keywordColName = String(table.exportConfig?.keywords || '').trim();
+                                if (keywordColName && headers.length > 0) {
+                                    const colNames = keywordColName.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+                                    const foundIdx = headers.findIndex((h) => colNames.includes(String(h || '').trim()));
+                                    if (foundIdx !== -1) {
+                                        keyColIndex = foundIdx;
+                                    }
+                                }
+                                const candidateValue = String(data[keyColIndex] ?? data[String(keyColIndex)] ?? '').trim();
+                                if (candidateValue) {
+                                    const existingRows = table.content.slice(1);
+                                    const isDuplicate = existingRows.some((row) => {
+                                        if (!Array.isArray(row))
+                                            return false;
+                                        const existingVal = String(row[keyColIndex + 1] ?? '').trim();
+                                        return existingVal === candidateValue;
+                                    });
+                                    if (isDuplicate) {
+                                        logWarn_ACU(`[防重拦截] 表格 "${table.name}" 唯一键 "${candidateValue}" 已存在于底表中，已安全丢弃本次 insertRow 操作。`);
+                                        break;
+                                    }
+                                }
+                            }
                             const reservedRowIds = createStableRowIdReservation_ACU(table.content.slice(1));
                             const newRow = [allocateStableRowId_ACU(reservedRowIds)];
                             const headers = table.content[0].slice(1);
@@ -59738,6 +59772,392 @@ $CONTENT
         }
     }
 
+    /**
+     * service/worldbook/injection-engine-entries.ts — 大纲表、总结表、重要人物表注入
+     * 从 injection-engine.ts 拆出
+     */
+    function projectWorldbookTable_ACU(table) {
+        const visibleColumns = getSheetColumnProjection_ACU(table).visibleColumns.filter(column => column.sourceIndex > 0);
+        return {
+            headers: visibleColumns.map(column => column.header),
+            rows: table.content.slice(1).map((row) => visibleColumns.map(column => row[column.sourceIndex])),
+        };
+    }
+    function splitKeywordsByComma_ACU(text) {
+        const raw = String(text || '').trim();
+        if (!raw)
+            return [];
+        return raw.split(/[,，]/).map(k => k.trim()).filter(Boolean);
+    }
+    async function updateOutlineTableEntry_ACU(outlineTable, isImport = false, targetLorebookOverride = null) {
+        if (!isWorldbookApiAvailable_ACU())
+            return;
+        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
+        if (!primaryLorebookName) {
+            logWarn_ACU('Cannot update outline table entry: No injection target lorebook set.');
+            return;
+        }
+        // [修改] 0TK 只控制 OutlineTable 条目；交火模式可独立运行，但不能接管"纪要索引"条目的 enabled 状态。
+        const worldbookConfig = getCurrentWorldbookConfig_ACU();
+        const zeroTkOccupyMode = worldbookConfig?.zeroTkOccupyMode === true;
+        const summaryVectorIndexModeEnabled = worldbookConfig?.summaryVectorIndexModeEnabled === true;
+        const outlineEntryEnabled = !zeroTkOccupyMode;
+        const summaryIndexEntryEnabled = !zeroTkOccupyMode;
+        const IMPORT_PREFIX = getImportBatchPrefix_ACU$1();
+        // [修改] 加入隔离标识前缀
+        const isoPrefix = getIsolationPrefix_ACU();
+        const baseComment = isImport ? `${IMPORT_PREFIX}TavernDB-ACU-OutlineTable` : 'TavernDB-ACU-OutlineTable';
+        const OUTLINE_COMMENT = isoPrefix + baseComment;
+        try {
+            const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
+            const usedOrders = buildUsedOrderSet_ACU(allEntries);
+            const existingEntry = allEntries.find(e => e.comment === OUTLINE_COMMENT);
+            // If no outline table data, delete the entry if it exists
+            if (!outlineTable || outlineTable.content.length < 2) {
+                if (existingEntry) {
+                    await deleteLorebookEntries_ACU(primaryLorebookName, [existingEntry.uid]);
+                    logDebug_ACU('Deleted outline table entry as there is no data.');
+                }
+                // [修复] 即使没有outlineTable数据，也要同步更新"纪要索引"条目的enabled状态。
+                // 0TK 持续控制该条目是否启用；交火模式不应把它重新打开。
+                try {
+                    const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
+                    if (existingIndexEntry) {
+                        if (existingIndexEntry.enabled !== summaryIndexEntryEnabled) {
+                            await setLorebookEntries_ACU(primaryLorebookName, [{
+                                    uid: existingIndexEntry.uid,
+                                    enabled: summaryIndexEntryEnabled,
+                                }]);
+                            logDebug_ACU(`Successfully updated 纪要索引 entry (no outline data). enabled=${summaryIndexEntryEnabled}`);
+                        }
+                    }
+                }
+                catch (indexError) {
+                    logWarn_ACU('Failed to update 纪要索引 entry enabled state (no outline data):', indexError);
+                }
+                return;
+            }
+            // Format the entire table as markdown
+            const { headers, rows } = projectWorldbookTable_ACU(outlineTable);
+            let content = `# ${outlineTable.name}\n\n`;
+            if (headers.length > 0) {
+                content += `| ${headers.join(' | ')} |\n`;
+                content += `|${headers.map(() => '---').join('|')}|\n`;
+            }
+            rows.forEach((row) => {
+                content += `| ${row.join(' | ')} |\n`;
+            });
+            const finalContent = `<剧情大纲编码索引>\n\n${content.trim()}\n\n</剧情大纲编码索引>`;
+            const outlineCfg = ensureExportConfigDefaults_ACU(outlineTable?.exportConfig, outlineTable?.name || '总体大纲');
+            const outlineFixedPlacement = normalizePlacementConfig_ACU(outlineCfg.fixedEntryPlacement, getFixedPlacementDefaultsForTable_ACU(outlineTable?.name || '总体大纲').entry);
+            if (existingEntry) {
+                const needsUpdate = existingEntry.content !== finalContent ||
+                    existingEntry.enabled !== outlineEntryEnabled ||
+                    existingEntry.type !== 'constant' ||
+                    existingEntry.prevent_recursion !== true ||
+                    !isEntryPlacementMatched_ACU(existingEntry, outlineFixedPlacement);
+                if (needsUpdate) {
+                    const updatedEntry = applyPlacementToEntry_ACU({
+                        uid: existingEntry.uid,
+                        content: finalContent,
+                        enabled: outlineEntryEnabled,
+                        type: 'constant',
+                        prevent_recursion: true,
+                    }, outlineFixedPlacement);
+                    await setLorebookEntries_ACU(primaryLorebookName, [updatedEntry]);
+                    logDebug_ACU(`Successfully updated the outline table lorebook entry. enabled=${outlineEntryEnabled} (0TK占用模式=${zeroTkOccupyMode})`);
+                }
+                else {
+                    logDebug_ACU('Outline table lorebook entry is already up-to-date.');
+                }
+            }
+            else {
+                const newEntry = applyPlacementToEntry_ACU({
+                    comment: OUTLINE_COMMENT,
+                    content: finalContent,
+                    keys: [OUTLINE_COMMENT + '-Key'],
+                    enabled: outlineEntryEnabled,
+                    type: 'constant',
+                    // [优化] order(插入深度) 避免与任何现有条目重复
+                    order: allocOrder_ACU(usedOrders, outlineFixedPlacement.order, 1, 99999),
+                    prevent_recursion: true,
+                }, outlineFixedPlacement);
+                await createLorebookEntries_ACU(primaryLorebookName, [newEntry]);
+                logDebug_ACU(`Outline table lorebook entry not found. Created a new one. enabled=${outlineEntryEnabled} (0TK占用模式=${zeroTkOccupyMode})`);
+            }
+            // [新增] 同步更新"纪要索引"条目的enabled状态。
+            // 0TK 持续控制该条目是否启用；交火模式不应把它重新打开。
+            try {
+                const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
+                if (existingIndexEntry) {
+                    if (existingIndexEntry.enabled !== summaryIndexEntryEnabled) {
+                        await setLorebookEntries_ACU(primaryLorebookName, [{
+                                uid: existingIndexEntry.uid,
+                                enabled: summaryIndexEntryEnabled,
+                            }]);
+                        logDebug_ACU(`Successfully updated 纪要索引 entry. enabled=${summaryIndexEntryEnabled}`);
+                    }
+                }
+            }
+            catch (indexError) {
+                logWarn_ACU('Failed to update 纪要索引 entry enabled state:', indexError);
+            }
+        }
+        catch (error) {
+            logError_ACU('Failed to update outline table lorebook entry:', error);
+        }
+    }
+    async function updateSummaryTableEntries_ACU(summaryTable, isImport = false, targetLorebookOverride = null) {
+        if (!isWorldbookApiAvailable_ACU())
+            return;
+        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
+        if (!primaryLorebookName) {
+            logWarn_ACU('Cannot update summary entries: No injection target lorebook set.');
+            return;
+        }
+        const IMPORT_PREFIX = getImportBatchPrefix_ACU$1();
+        // [修改] 加入隔离标识前缀
+        const isoPrefix = getIsolationPrefix_ACU();
+        const baseSummaryPrefix = isImport ? `${IMPORT_PREFIX}总结条目` : '总结条目';
+        const SUMMARY_ENTRY_PREFIX = isoPrefix + baseSummaryPrefix;
+        // 旧版兼容前缀也要加上隔离判断
+        const baseSmallSummaryPrefix = isImport ? `${IMPORT_PREFIX}小总结条目` : '小总结条目';
+        const SMALL_SUMMARY_PREFIX = isoPrefix + baseSmallSummaryPrefix;
+        try {
+            const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
+            const usedOrders = buildUsedOrderSet_ACU(allEntries);
+            // --- 1. Delete old summary entries ---
+            // 用户要求：外部导入每次导入前不清理（允许多批并存，避免后一批覆盖前一批）
+            if (!isImport) {
+                const uidsToDelete = allEntries
+                    .filter(e => e.comment && (e.comment.startsWith(SUMMARY_ENTRY_PREFIX) || e.comment.startsWith(SMALL_SUMMARY_PREFIX)))
+                    .map(e => e.uid);
+                if (uidsToDelete.length > 0) {
+                    await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
+                    logDebug_ACU(`Deleted ${uidsToDelete.length} old summary lorebook entries.`);
+                }
+            }
+            // --- 2. Re-create entries from the table ---
+            const projectedSummary = summaryTable?.content?.length > 0 ? projectWorldbookTable_ACU(summaryTable) : { headers: [], rows: [] };
+            const summaryRows = projectedSummary.rows;
+            if (summaryRows.length === 0) {
+                logDebug_ACU('No summary rows to create entries for.');
+                return;
+            }
+            const summaryCfg = ensureExportConfigDefaults_ACU(summaryTable?.exportConfig, summaryTable?.name || '总结表');
+            const summaryFixedPlacement = normalizePlacementConfig_ACU(summaryCfg.fixedEntryPlacement, getFixedPlacementDefaultsForTable_ACU(summaryTable?.name || '总结表').entry);
+            const headers = projectedSummary.headers;
+            const keywordColumnIndex = headers.indexOf('编码索引');
+            if (keywordColumnIndex === -1) {
+                logError_ACU('Cannot find "编码索引" column in 总结表. Cannot process summary entries.');
+                return;
+            }
+            const entriesToCreate = [];
+            // [优化] 总结表"按表占深度"：所有总结行共用同一个 order(深度)，避免 N 行占 N 个深度
+            // 注意：MemoryStart / MemoryEnd 的"3深度成组"会在 updateReadableLorebookEntry_ACU 中统一对齐并保证连续
+            const sharedSummaryDataOrder = allocOrder_ACU(usedOrders, summaryFixedPlacement.order, 1, 99999);
+            summaryRows.forEach((row, i) => {
+                const keywordsRaw = row[keywordColumnIndex];
+                if (!keywordsRaw)
+                    return; // Skip if no keywords
+                const keywords = splitKeywordsByComma_ACU(keywordsRaw);
+                if (keywords.length === 0)
+                    return;
+                // 行条目只包含行数据，不包含表头
+                const content = `| ${row.join(' | ')} |\n`;
+                const newEntryData = applyPlacementToEntry_ACU({
+                    comment: `${SUMMARY_ENTRY_PREFIX}${i + 1}`,
+                    content: content,
+                    keys: keywords,
+                    enabled: true,
+                    type: 'keyword', // Green light entry
+                    // [优化] 同表所有行条目共用同一深度
+                    order: sharedSummaryDataOrder,
+                    prevent_recursion: true
+                }, summaryFixedPlacement);
+                entriesToCreate.push(newEntryData);
+            });
+            if (entriesToCreate.length > 0) {
+                await createLorebookEntries_ACU(primaryLorebookName, entriesToCreate);
+                logDebug_ACU(`Successfully created ${entriesToCreate.length} new summary entries.`);
+                // [兜底] 某些实现可能会在创建时自动改写/规范化 order，导致同表行条目仍然各占一个深度。
+                // 这里在创建完成后，强制把"总结条目/小总结条目"统一回写到同一个 order。
+                try {
+                    const latest = await getLorebookEntries_ACU(primaryLorebookName);
+                    const toFix = latest.filter(e => {
+                        const c = e?.comment || '';
+                        return c.startsWith(SUMMARY_ENTRY_PREFIX) || c.startsWith(SMALL_SUMMARY_PREFIX);
+                    });
+                    if (toFix.length > 0) {
+                        await setLorebookEntries_ACU(primaryLorebookName, toFix.map(e => applyPlacementToEntry_ACU({ uid: e.uid, order: sharedSummaryDataOrder }, summaryFixedPlacement)));
+                    }
+                }
+                catch (e) {
+                    logWarn_ACU('[SummaryOrderFix] Failed to enforce shared order for summary entries:', e);
+                }
+            }
+        }
+        catch (error) {
+            logError_ACU('Failed to update summary lorebook entries:', error);
+        }
+    }
+    async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport = false, targetLorebookOverride = null) {
+        if (!isWorldbookApiAvailable_ACU())
+            return;
+        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
+        if (!primaryLorebookName) {
+            logWarn_ACU('Cannot update important persons entries: No injection target lorebook set.');
+            return;
+        }
+        const IMPORT_PREFIX = getImportBatchPrefix_ACU$1();
+        // [修改] 加入隔离标识前缀
+        const isoPrefix = getIsolationPrefix_ACU();
+        const basePersonEntryPrefix = isImport ? `${IMPORT_PREFIX}重要人物条目` : '重要人物条目';
+        const PERSON_ENTRY_PREFIX = isoPrefix + basePersonEntryPrefix;
+        const basePersonIndexComment = isImport ? `${IMPORT_PREFIX}TavernDB-ACU-ImportantPersonsIndex` : 'TavernDB-ACU-ImportantPersonsIndex';
+        const PERSON_INDEX_COMMENT = isoPrefix + basePersonIndexComment;
+        const personsCfg = ensureExportConfigDefaults_ACU(importantPersonsTable?.exportConfig, importantPersonsTable?.name || '重要人物表');
+        const personsEntryPlacement = normalizePlacementConfig_ACU(personsCfg.fixedEntryPlacement, getFixedPlacementDefaultsForTable_ACU(importantPersonsTable?.name || '重要人物表').entry);
+        const personsIndexPlacement = normalizePlacementConfig_ACU(personsCfg.fixedIndexPlacement, getFixedPlacementDefaultsForTable_ACU(importantPersonsTable?.name || '重要人物表').index);
+        try {
+            const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
+            const usedOrders = buildUsedOrderSet_ACU(allEntries);
+            // --- 1. 全量删除 ---
+            // 用户要求：外部导入每次导入前不清理（允许多批并存，避免后一批覆盖前一批）
+            if (!isImport) {
+                // 找出所有由插件管理的旧条目 (人物条目 + 索引条目)
+                const uidsToDelete = allEntries
+                    .filter(e => e.comment && (e.comment.startsWith(PERSON_ENTRY_PREFIX) || e.comment === PERSON_INDEX_COMMENT || e.comment.includes('PersonsHeader')))
+                    .map(e => e.uid);
+                if (uidsToDelete.length > 0) {
+                    await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
+                    logDebug_ACU(`Deleted ${uidsToDelete.length} old person-related lorebook entries.`);
+                }
+            }
+            // --- 2. 全量重建 ---
+            const projectedPersons = importantPersonsTable?.content?.length > 0 ? projectWorldbookTable_ACU(importantPersonsTable) : { headers: [], rows: [] };
+            const personRows = projectedPersons.rows;
+            if (personRows.length === 0) {
+                logDebug_ACU('No important persons to create entries for.');
+                return; // 如果没有人物，删除后直接返回
+            }
+            const headers = projectedPersons.headers;
+            const nameColumnIndex = headers.indexOf('姓名') !== -1 ? headers.indexOf('姓名') : headers.indexOf('角色名');
+            if (nameColumnIndex === -1) {
+                logError_ACU('Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.');
+                return;
+            }
+            const personEntriesToCreate = [];
+            const personNames = [];
+            // 2.1 准备要创建的人物条目
+            const buildPersonNameKeywords_ACU = (rawName) => {
+                const raw = String(rawName || '').trim();
+                if (!raw)
+                    return [];
+                const baseParts = splitKeywordsByComma_ACU(raw);
+                const parts = baseParts.length > 0 ? baseParts : [raw];
+                const keys = [];
+                parts.forEach(part => {
+                    if (!part)
+                        return;
+                    keys.push(part);
+                    const bracketMatch = part.match(/^([^（(]+)[（(]/);
+                    if (bracketMatch) {
+                        const nameBeforeBracket = bracketMatch[1].trim();
+                        if (nameBeforeBracket && nameBeforeBracket !== part) {
+                            keys.push(nameBeforeBracket);
+                        }
+                    }
+                });
+                return [...new Set(keys)];
+            };
+            personRows.forEach((row, i) => {
+                const personName = row[nameColumnIndex];
+                if (!personName)
+                    return;
+                personNames.push(personName);
+                // [优化] 生成关键词：英文逗号分割为多关键词；每个关键词保留括号前的部分
+                const keys = buildPersonNameKeywords_ACU(personName);
+                const content = `| ${row.join(' | ')} |`;
+                const newEntryData = applyPlacementToEntry_ACU({
+                    comment: `${PERSON_ENTRY_PREFIX}${i + 1}`,
+                    content: content,
+                    keys: keys,
+                    enabled: true,
+                    type: 'keyword',
+                    // [优化] order(插入深度) 避免与任何现有条目重复（人物条目按序分配）
+                    order: null,
+                    prevent_recursion: true
+                }, personsEntryPlacement);
+                personEntriesToCreate.push(newEntryData);
+            });
+            // 2.1.5 创建重要人物表表头条目
+            const personsHeaderContent = `# ${importantPersonsTable.name}\n\n| ${headers.join(' | ')} |\n|${headers.map(() => '---').join('|')}|`;
+            const personsHeaderEntryData = applyPlacementToEntry_ACU({
+                // [修复] 外部导入时 PersonsHeader 也必须带外部导入前缀，避免被清理逻辑误删
+                comment: isoPrefix + (isImport ? `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader` : 'TavernDB-ACU-PersonsHeader'),
+                content: personsHeaderContent,
+                keys: [isoPrefix + (isImport ? `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader-Key` : 'TavernDB-ACU-PersonsHeader-Key')],
+                enabled: true,
+                type: 'constant',
+                order: null,
+                prevent_recursion: true
+            }, personsEntryPlacement);
+            personEntriesToCreate.unshift(personsHeaderEntryData);
+            // 2.2 准备要创建的索引条目
+            let indexContent = "# 以下是之前剧情中登场过的角色\n\n";
+            indexContent += `| ${headers[nameColumnIndex]} |\n|---|\n` + personNames.map(name => `| ${name} |`).join('\n');
+            // indexContent 已是纯文本，由 Wrapper 条目包裹
+            const indexEntryData = {
+                comment: PERSON_INDEX_COMMENT,
+                content: indexContent,
+                keys: [PERSON_INDEX_COMMENT + "-Key"],
+                enabled: true,
+                type: 'constant',
+                order: null,
+                prevent_recursion: true
+            };
+            // 3. 执行创建
+            // [优化] 重要人物表 3-depth 成组对齐：
+            // - PersonsHeader / 人物行条目 / PersonsIndex 只占用连续 3 个 order(深度)
+            // - 人物行条目共用同一个深度（不再每人占一个深度）
+            const personsOrderBlockBase = allocConsecutiveOrderBlock_ACU(usedOrders, 3, Math.max(1, personsEntryPlacement.order - 1), 1, 99999);
+            personEntriesToCreate[0].order = personsOrderBlockBase; // header
+            for (let i = 1; i < personEntriesToCreate.length; i++) {
+                personEntriesToCreate[i].order = personsOrderBlockBase + 1; // all persons share
+            }
+            indexEntryData.order = personsOrderBlockBase + 2; // index/footer
+            const allCreates = [...personEntriesToCreate, applyPlacementToEntry_ACU(indexEntryData, personsIndexPlacement)];
+            if (allCreates.length > 0) {
+                await createLorebookEntries_ACU(primaryLorebookName, allCreates);
+                logDebug_ACU(`Successfully created ${allCreates.length} new person-related entries.`);
+                // [兜底] 创建完成后强制回写 order，避免创建接口自动改写导致仍然"每人一深度"
+                try {
+                    const latest = await getLorebookEntries_ACU(primaryLorebookName);
+                    const header = latest.find(e => e.comment === personsHeaderEntryData.comment);
+                    const index = latest.find(e => e.comment === PERSON_INDEX_COMMENT);
+                    const rows = latest.filter(e => (e?.comment || '').startsWith(PERSON_ENTRY_PREFIX));
+                    const updates = [];
+                    if (header?.uid)
+                        updates.push(applyPlacementToEntry_ACU({ uid: header.uid, order: personsOrderBlockBase }, personsEntryPlacement));
+                    rows.forEach(e => { if (e?.uid)
+                        updates.push(applyPlacementToEntry_ACU({ uid: e.uid, order: personsOrderBlockBase + 1 }, personsEntryPlacement)); });
+                    if (index?.uid)
+                        updates.push(applyPlacementToEntry_ACU({ uid: index.uid, order: personsOrderBlockBase + 2 }, personsIndexPlacement));
+                    if (updates.length > 0) {
+                        await setLorebookEntries_ACU(primaryLorebookName, updates);
+                    }
+                }
+                catch (e) {
+                    logWarn_ACU('[PersonsOrderFix] Failed to enforce grouped orders for important persons:', e);
+                }
+            }
+        }
+        catch (error) {
+            logError_ACU('Failed to update important persons related lorebook entries:', error);
+        }
+    }
+
     const EXTERNAL_CUSTOM_TABLE_EXPORT_MARKER_VERSION_ACU = 1;
     const MARKER_PATTERN_ACU = /<!--\s*ACU_CUSTOM_TABLE_EXPORT_V1\s+({[\s\S]*?})\s*-->/;
     function buildExternalCustomTableExportComment_ACU(comment, marker) {
@@ -63208,7 +63628,13 @@ $CONTENT
      * 从 prompt-builder.ts 拆出（L14-L194）
      */
     const AUTHOR_SQL_TABLE_IDENTIFIER_ACU = /^[A-Za-z_][A-Za-z0-9_]*$/;
-    function resolvePromptRowWindow_ACU(table, effectiveAllRows, flightModeEnabled) {
+    function resolvePromptRowWindow_ACU(table, effectiveAllRows, optionsOrFlightMode = false) {
+        const flightModeEnabled = typeof optionsOrFlightMode === 'boolean'
+            ? optionsOrFlightMode
+            : (optionsOrFlightMode?.flightModeEnabled === true);
+        const messages = (typeof optionsOrFlightMode === 'object' && Array.isArray(optionsOrFlightMode?.messages))
+            ? optionsOrFlightMode.messages
+            : [];
         const tableName = String(table?.name || '').trim();
         const isChronicleTable = tableName === '纪要表';
         const isFixedSummaryTable = isChronicleTable || tableName === '总结表';
@@ -63222,6 +63648,118 @@ $CONTENT
             };
         }
         if (!isFixedSummaryTable) {
+            const exportConfig = table?.exportConfig;
+            const isSplitKeywordExport = exportConfig?.enabled === true
+                && exportConfig?.splitByRow === true
+                && exportConfig?.entryType === 'keyword';
+            const isDynamicWindowActive = isSplitKeywordExport
+                && exportConfig?.dynamicWindowEnabled === true;
+            const threshold = typeof exportConfig?.dynamicWindowThreshold === 'number' && exportConfig.dynamicWindowThreshold >= 0
+                ? exportConfig.dynamicWindowThreshold
+                : 20;
+            if (isDynamicWindowActive && effectiveAllRows.length > threshold) {
+                const rawHeaders = Array.isArray(table?.content?.[0])
+                    ? table.content[0].map((h) => String(h ?? '').trim())
+                    : [];
+                // 1. 最新 n 回合对话文本提取
+                const roundCount = typeof exportConfig.dynamicWindowKeywordRounds === 'number' && exportConfig.dynamicWindowKeywordRounds > 0
+                    ? exportConfig.dynamicWindowKeywordRounds
+                    : 5;
+                const messageCountToScan = roundCount * 2;
+                const scanMessages = messages.slice(-messageCountToScan);
+                const scanText = scanMessages.map((m) => m?.mes || m?.message || '').join('\n');
+                const scanTextLower = scanText.toLowerCase();
+                // 2. 状态列配置
+                const filterColName = String(exportConfig.dynamicWindowFilterColumn || '').trim();
+                const filterVal = String(exportConfig.dynamicWindowFilterValue ?? '').trim();
+                let filterColIndex = -1;
+                if (filterColName && rawHeaders.length > 0) {
+                    filterColIndex = rawHeaders.indexOf(filterColName);
+                }
+                // 3. 最新新增缓冲行
+                const latestRowsCount = typeof exportConfig.dynamicWindowLatestRows === 'number'
+                    ? exportConfig.dynamicWindowLatestRows
+                    : 2;
+                const bufferStartIndex = latestRowsCount > 0
+                    ? Math.max(0, effectiveAllRows.length - latestRowsCount)
+                    : effectiveAllRows.length;
+                // 4. 关键词召回列
+                const keywordColNames = exportConfig.keywords
+                    ? splitKeywordsByComma_ACU(exportConfig.keywords)
+                    : [];
+                const keywordColIndices = [];
+                const staticKeywords = [];
+                keywordColNames.forEach((name) => {
+                    const idx = rawHeaders.indexOf(name);
+                    if (idx !== -1) {
+                        keywordColIndices.push(idx);
+                    }
+                    else {
+                        staticKeywords.push(name.toLowerCase());
+                    }
+                });
+                if (keywordColIndices.length === 0 && staticKeywords.length === 0 && rawHeaders.length > 1) {
+                    keywordColIndices.push(1);
+                }
+                const matchedIndices = new Set();
+                effectiveAllRows.forEach((row, rowIndex) => {
+                    if (!Array.isArray(row))
+                        return;
+                    // 条件 B: 最新新增缓冲
+                    if (rowIndex >= bufferStartIndex) {
+                        matchedIndices.add(rowIndex);
+                        return;
+                    }
+                    // 条件 A: 状态列固定值匹配
+                    if (filterColIndex !== -1 && filterVal !== '') {
+                        const cellVal = String(row[filterColIndex] ?? '').trim();
+                        if (cellVal === filterVal) {
+                            matchedIndices.add(rowIndex);
+                            return;
+                        }
+                    }
+                    // 条件 C: 关键词召回
+                    if (scanTextLower) {
+                        let isKeywordMatched = false;
+                        for (const sk of staticKeywords) {
+                            if (sk && scanTextLower.includes(sk)) {
+                                isKeywordMatched = true;
+                                break;
+                            }
+                        }
+                        if (!isKeywordMatched) {
+                            for (const colIdx of keywordColIndices) {
+                                const cellText = String(row[colIdx] ?? '').trim();
+                                if (!cellText)
+                                    continue;
+                                const keys = splitKeywordsByComma_ACU(cellText);
+                                for (const k of keys) {
+                                    const lowerKey = k.toLowerCase();
+                                    if (lowerKey && scanTextLower.includes(lowerKey)) {
+                                        isKeywordMatched = true;
+                                        break;
+                                    }
+                                }
+                                if (isKeywordMatched)
+                                    break;
+                            }
+                        }
+                        if (isKeywordMatched) {
+                            matchedIndices.add(rowIndex);
+                            return;
+                        }
+                    }
+                });
+                const sortedIndices = Array.from(matchedIndices).sort((a, b) => a - b);
+                const rowsToProcess = sortedIndices.map(idx => effectiveAllRows[idx]);
+                const limitNote = `Dynamic row window active: Showing ${rowsToProcess.length} of ${effectiveAllRows.length} entries (threshold=${threshold}).`;
+                return {
+                    rowsToProcess,
+                    startIndex: 0,
+                    limitNote,
+                    rowIndices: sortedIndices,
+                };
+            }
             const sendLatestRows = typeof table?.updateConfig?.sendLatestRows === 'number'
                 ? table.updateConfig.sendLatestRows
                 : -1;
@@ -63394,6 +63932,7 @@ $CONTENT
                 tableDataText += formatTableForSqliteMode(table, tableIndex, sheetKey, _seedGuideDataForThisPrepare_ACU, {
                     allowSeedRowsFallback: false,
                     flightModeEnabled: flightMode.enabled,
+                    messages,
                     ...selectedPromptName,
                 });
                 continue;
@@ -63445,14 +63984,17 @@ $CONTENT
                 if (isUsingSeedRows) {
                     tableDataText += `  - SeedRows: 已提供模板基础数据（尚未写入聊天楼层数据；本次填表可直接基于这些行更新）\n`;
                 }
-                const rowWindow = resolvePromptRowWindow_ACU(table, effectiveAllRows, flightMode.enabled);
+                const rowWindow = resolvePromptRowWindow_ACU(table, effectiveAllRows, {
+                    flightModeEnabled: flightMode.enabled,
+                    messages,
+                });
                 const { rowsToProcess, startIndex } = rowWindow;
                 if (rowWindow.limitNote) {
                     tableDataText += `  - Note: ${rowWindow.limitNote}\n`;
                 }
                 if (rowsToProcess.length > 0) {
                     rowsToProcess.forEach((row, index) => {
-                        const originalRowIndex = startIndex + index;
+                        const originalRowIndex = rowWindow.rowIndices ? rowWindow.rowIndices[index] : (startIndex + index);
                         const rowData = visibleColumns.map(column => Array.isArray(row) ? row[column.sourceIndex] : null).join(', ');
                         tableDataText += `  [${originalRowIndex}] ${rowData}\n`;
                     });
@@ -63824,7 +64366,10 @@ $CONTENT
             logWarn_ACU(`[SQLite prompt] 已忽略表 ${table.name || sheetKey} 的 sendRowsSqlTemplate：隐藏 physical columns 时无法证明自定义 SQL 不会泄露隐藏数据。`);
         }
         // 行数限制逻辑（与原生模式一致）
-        const rowWindow = resolvePromptRowWindow_ACU(table, effectiveAllRows, options.flightModeEnabled === true);
+        const rowWindow = resolvePromptRowWindow_ACU(table, effectiveAllRows, {
+            flightModeEnabled: options.flightModeEnabled === true,
+            messages: options.messages,
+        });
         const { rowsToProcess, startIndex } = rowWindow;
         if (rowWindow.limitNote) {
             text += `-- Note: ${rowWindow.limitNote}\n`;
@@ -72237,392 +72782,6 @@ $CONTENT
             writeSet: keys.map(sheetKey => ({ kind: 'sheet', sheetKey })),
             maintenanceMode: 'exclusive',
         }, () => purgeSheetKeysFromChatHistoryHardCore_ACU(keys));
-    }
-
-    /**
-     * service/worldbook/injection-engine-entries.ts — 大纲表、总结表、重要人物表注入
-     * 从 injection-engine.ts 拆出
-     */
-    function projectWorldbookTable_ACU(table) {
-        const visibleColumns = getSheetColumnProjection_ACU(table).visibleColumns.filter(column => column.sourceIndex > 0);
-        return {
-            headers: visibleColumns.map(column => column.header),
-            rows: table.content.slice(1).map((row) => visibleColumns.map(column => row[column.sourceIndex])),
-        };
-    }
-    function splitKeywordsByComma_ACU(text) {
-        const raw = String(text || '').trim();
-        if (!raw)
-            return [];
-        return raw.split(/[,，]/).map(k => k.trim()).filter(Boolean);
-    }
-    async function updateOutlineTableEntry_ACU(outlineTable, isImport = false, targetLorebookOverride = null) {
-        if (!isWorldbookApiAvailable_ACU())
-            return;
-        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
-        if (!primaryLorebookName) {
-            logWarn_ACU('Cannot update outline table entry: No injection target lorebook set.');
-            return;
-        }
-        // [修改] 0TK 只控制 OutlineTable 条目；交火模式可独立运行，但不能接管"纪要索引"条目的 enabled 状态。
-        const worldbookConfig = getCurrentWorldbookConfig_ACU();
-        const zeroTkOccupyMode = worldbookConfig?.zeroTkOccupyMode === true;
-        const summaryVectorIndexModeEnabled = worldbookConfig?.summaryVectorIndexModeEnabled === true;
-        const outlineEntryEnabled = !zeroTkOccupyMode;
-        const summaryIndexEntryEnabled = !zeroTkOccupyMode;
-        const IMPORT_PREFIX = getImportBatchPrefix_ACU$1();
-        // [修改] 加入隔离标识前缀
-        const isoPrefix = getIsolationPrefix_ACU();
-        const baseComment = isImport ? `${IMPORT_PREFIX}TavernDB-ACU-OutlineTable` : 'TavernDB-ACU-OutlineTable';
-        const OUTLINE_COMMENT = isoPrefix + baseComment;
-        try {
-            const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
-            const usedOrders = buildUsedOrderSet_ACU(allEntries);
-            const existingEntry = allEntries.find(e => e.comment === OUTLINE_COMMENT);
-            // If no outline table data, delete the entry if it exists
-            if (!outlineTable || outlineTable.content.length < 2) {
-                if (existingEntry) {
-                    await deleteLorebookEntries_ACU(primaryLorebookName, [existingEntry.uid]);
-                    logDebug_ACU('Deleted outline table entry as there is no data.');
-                }
-                // [修复] 即使没有outlineTable数据，也要同步更新"纪要索引"条目的enabled状态。
-                // 0TK 持续控制该条目是否启用；交火模式不应把它重新打开。
-                try {
-                    const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
-                    if (existingIndexEntry) {
-                        if (existingIndexEntry.enabled !== summaryIndexEntryEnabled) {
-                            await setLorebookEntries_ACU(primaryLorebookName, [{
-                                    uid: existingIndexEntry.uid,
-                                    enabled: summaryIndexEntryEnabled,
-                                }]);
-                            logDebug_ACU(`Successfully updated 纪要索引 entry (no outline data). enabled=${summaryIndexEntryEnabled}`);
-                        }
-                    }
-                }
-                catch (indexError) {
-                    logWarn_ACU('Failed to update 纪要索引 entry enabled state (no outline data):', indexError);
-                }
-                return;
-            }
-            // Format the entire table as markdown
-            const { headers, rows } = projectWorldbookTable_ACU(outlineTable);
-            let content = `# ${outlineTable.name}\n\n`;
-            if (headers.length > 0) {
-                content += `| ${headers.join(' | ')} |\n`;
-                content += `|${headers.map(() => '---').join('|')}|\n`;
-            }
-            rows.forEach((row) => {
-                content += `| ${row.join(' | ')} |\n`;
-            });
-            const finalContent = `<剧情大纲编码索引>\n\n${content.trim()}\n\n</剧情大纲编码索引>`;
-            const outlineCfg = ensureExportConfigDefaults_ACU(outlineTable?.exportConfig, outlineTable?.name || '总体大纲');
-            const outlineFixedPlacement = normalizePlacementConfig_ACU(outlineCfg.fixedEntryPlacement, getFixedPlacementDefaultsForTable_ACU(outlineTable?.name || '总体大纲').entry);
-            if (existingEntry) {
-                const needsUpdate = existingEntry.content !== finalContent ||
-                    existingEntry.enabled !== outlineEntryEnabled ||
-                    existingEntry.type !== 'constant' ||
-                    existingEntry.prevent_recursion !== true ||
-                    !isEntryPlacementMatched_ACU(existingEntry, outlineFixedPlacement);
-                if (needsUpdate) {
-                    const updatedEntry = applyPlacementToEntry_ACU({
-                        uid: existingEntry.uid,
-                        content: finalContent,
-                        enabled: outlineEntryEnabled,
-                        type: 'constant',
-                        prevent_recursion: true,
-                    }, outlineFixedPlacement);
-                    await setLorebookEntries_ACU(primaryLorebookName, [updatedEntry]);
-                    logDebug_ACU(`Successfully updated the outline table lorebook entry. enabled=${outlineEntryEnabled} (0TK占用模式=${zeroTkOccupyMode})`);
-                }
-                else {
-                    logDebug_ACU('Outline table lorebook entry is already up-to-date.');
-                }
-            }
-            else {
-                const newEntry = applyPlacementToEntry_ACU({
-                    comment: OUTLINE_COMMENT,
-                    content: finalContent,
-                    keys: [OUTLINE_COMMENT + '-Key'],
-                    enabled: outlineEntryEnabled,
-                    type: 'constant',
-                    // [优化] order(插入深度) 避免与任何现有条目重复
-                    order: allocOrder_ACU(usedOrders, outlineFixedPlacement.order, 1, 99999),
-                    prevent_recursion: true,
-                }, outlineFixedPlacement);
-                await createLorebookEntries_ACU(primaryLorebookName, [newEntry]);
-                logDebug_ACU(`Outline table lorebook entry not found. Created a new one. enabled=${outlineEntryEnabled} (0TK占用模式=${zeroTkOccupyMode})`);
-            }
-            // [新增] 同步更新"纪要索引"条目的enabled状态。
-            // 0TK 持续控制该条目是否启用；交火模式不应把它重新打开。
-            try {
-                const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
-                if (existingIndexEntry) {
-                    if (existingIndexEntry.enabled !== summaryIndexEntryEnabled) {
-                        await setLorebookEntries_ACU(primaryLorebookName, [{
-                                uid: existingIndexEntry.uid,
-                                enabled: summaryIndexEntryEnabled,
-                            }]);
-                        logDebug_ACU(`Successfully updated 纪要索引 entry. enabled=${summaryIndexEntryEnabled}`);
-                    }
-                }
-            }
-            catch (indexError) {
-                logWarn_ACU('Failed to update 纪要索引 entry enabled state:', indexError);
-            }
-        }
-        catch (error) {
-            logError_ACU('Failed to update outline table lorebook entry:', error);
-        }
-    }
-    async function updateSummaryTableEntries_ACU(summaryTable, isImport = false, targetLorebookOverride = null) {
-        if (!isWorldbookApiAvailable_ACU())
-            return;
-        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
-        if (!primaryLorebookName) {
-            logWarn_ACU('Cannot update summary entries: No injection target lorebook set.');
-            return;
-        }
-        const IMPORT_PREFIX = getImportBatchPrefix_ACU$1();
-        // [修改] 加入隔离标识前缀
-        const isoPrefix = getIsolationPrefix_ACU();
-        const baseSummaryPrefix = isImport ? `${IMPORT_PREFIX}总结条目` : '总结条目';
-        const SUMMARY_ENTRY_PREFIX = isoPrefix + baseSummaryPrefix;
-        // 旧版兼容前缀也要加上隔离判断
-        const baseSmallSummaryPrefix = isImport ? `${IMPORT_PREFIX}小总结条目` : '小总结条目';
-        const SMALL_SUMMARY_PREFIX = isoPrefix + baseSmallSummaryPrefix;
-        try {
-            const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
-            const usedOrders = buildUsedOrderSet_ACU(allEntries);
-            // --- 1. Delete old summary entries ---
-            // 用户要求：外部导入每次导入前不清理（允许多批并存，避免后一批覆盖前一批）
-            if (!isImport) {
-                const uidsToDelete = allEntries
-                    .filter(e => e.comment && (e.comment.startsWith(SUMMARY_ENTRY_PREFIX) || e.comment.startsWith(SMALL_SUMMARY_PREFIX)))
-                    .map(e => e.uid);
-                if (uidsToDelete.length > 0) {
-                    await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
-                    logDebug_ACU(`Deleted ${uidsToDelete.length} old summary lorebook entries.`);
-                }
-            }
-            // --- 2. Re-create entries from the table ---
-            const projectedSummary = summaryTable?.content?.length > 0 ? projectWorldbookTable_ACU(summaryTable) : { headers: [], rows: [] };
-            const summaryRows = projectedSummary.rows;
-            if (summaryRows.length === 0) {
-                logDebug_ACU('No summary rows to create entries for.');
-                return;
-            }
-            const summaryCfg = ensureExportConfigDefaults_ACU(summaryTable?.exportConfig, summaryTable?.name || '总结表');
-            const summaryFixedPlacement = normalizePlacementConfig_ACU(summaryCfg.fixedEntryPlacement, getFixedPlacementDefaultsForTable_ACU(summaryTable?.name || '总结表').entry);
-            const headers = projectedSummary.headers;
-            const keywordColumnIndex = headers.indexOf('编码索引');
-            if (keywordColumnIndex === -1) {
-                logError_ACU('Cannot find "编码索引" column in 总结表. Cannot process summary entries.');
-                return;
-            }
-            const entriesToCreate = [];
-            // [优化] 总结表"按表占深度"：所有总结行共用同一个 order(深度)，避免 N 行占 N 个深度
-            // 注意：MemoryStart / MemoryEnd 的"3深度成组"会在 updateReadableLorebookEntry_ACU 中统一对齐并保证连续
-            const sharedSummaryDataOrder = allocOrder_ACU(usedOrders, summaryFixedPlacement.order, 1, 99999);
-            summaryRows.forEach((row, i) => {
-                const keywordsRaw = row[keywordColumnIndex];
-                if (!keywordsRaw)
-                    return; // Skip if no keywords
-                const keywords = splitKeywordsByComma_ACU(keywordsRaw);
-                if (keywords.length === 0)
-                    return;
-                // 行条目只包含行数据，不包含表头
-                const content = `| ${row.join(' | ')} |\n`;
-                const newEntryData = applyPlacementToEntry_ACU({
-                    comment: `${SUMMARY_ENTRY_PREFIX}${i + 1}`,
-                    content: content,
-                    keys: keywords,
-                    enabled: true,
-                    type: 'keyword', // Green light entry
-                    // [优化] 同表所有行条目共用同一深度
-                    order: sharedSummaryDataOrder,
-                    prevent_recursion: true
-                }, summaryFixedPlacement);
-                entriesToCreate.push(newEntryData);
-            });
-            if (entriesToCreate.length > 0) {
-                await createLorebookEntries_ACU(primaryLorebookName, entriesToCreate);
-                logDebug_ACU(`Successfully created ${entriesToCreate.length} new summary entries.`);
-                // [兜底] 某些实现可能会在创建时自动改写/规范化 order，导致同表行条目仍然各占一个深度。
-                // 这里在创建完成后，强制把"总结条目/小总结条目"统一回写到同一个 order。
-                try {
-                    const latest = await getLorebookEntries_ACU(primaryLorebookName);
-                    const toFix = latest.filter(e => {
-                        const c = e?.comment || '';
-                        return c.startsWith(SUMMARY_ENTRY_PREFIX) || c.startsWith(SMALL_SUMMARY_PREFIX);
-                    });
-                    if (toFix.length > 0) {
-                        await setLorebookEntries_ACU(primaryLorebookName, toFix.map(e => applyPlacementToEntry_ACU({ uid: e.uid, order: sharedSummaryDataOrder }, summaryFixedPlacement)));
-                    }
-                }
-                catch (e) {
-                    logWarn_ACU('[SummaryOrderFix] Failed to enforce shared order for summary entries:', e);
-                }
-            }
-        }
-        catch (error) {
-            logError_ACU('Failed to update summary lorebook entries:', error);
-        }
-    }
-    async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport = false, targetLorebookOverride = null) {
-        if (!isWorldbookApiAvailable_ACU())
-            return;
-        const primaryLorebookName = targetLorebookOverride || await getInjectionTargetLorebook_ACU();
-        if (!primaryLorebookName) {
-            logWarn_ACU('Cannot update important persons entries: No injection target lorebook set.');
-            return;
-        }
-        const IMPORT_PREFIX = getImportBatchPrefix_ACU$1();
-        // [修改] 加入隔离标识前缀
-        const isoPrefix = getIsolationPrefix_ACU();
-        const basePersonEntryPrefix = isImport ? `${IMPORT_PREFIX}重要人物条目` : '重要人物条目';
-        const PERSON_ENTRY_PREFIX = isoPrefix + basePersonEntryPrefix;
-        const basePersonIndexComment = isImport ? `${IMPORT_PREFIX}TavernDB-ACU-ImportantPersonsIndex` : 'TavernDB-ACU-ImportantPersonsIndex';
-        const PERSON_INDEX_COMMENT = isoPrefix + basePersonIndexComment;
-        const personsCfg = ensureExportConfigDefaults_ACU(importantPersonsTable?.exportConfig, importantPersonsTable?.name || '重要人物表');
-        const personsEntryPlacement = normalizePlacementConfig_ACU(personsCfg.fixedEntryPlacement, getFixedPlacementDefaultsForTable_ACU(importantPersonsTable?.name || '重要人物表').entry);
-        const personsIndexPlacement = normalizePlacementConfig_ACU(personsCfg.fixedIndexPlacement, getFixedPlacementDefaultsForTable_ACU(importantPersonsTable?.name || '重要人物表').index);
-        try {
-            const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
-            const usedOrders = buildUsedOrderSet_ACU(allEntries);
-            // --- 1. 全量删除 ---
-            // 用户要求：外部导入每次导入前不清理（允许多批并存，避免后一批覆盖前一批）
-            if (!isImport) {
-                // 找出所有由插件管理的旧条目 (人物条目 + 索引条目)
-                const uidsToDelete = allEntries
-                    .filter(e => e.comment && (e.comment.startsWith(PERSON_ENTRY_PREFIX) || e.comment === PERSON_INDEX_COMMENT || e.comment.includes('PersonsHeader')))
-                    .map(e => e.uid);
-                if (uidsToDelete.length > 0) {
-                    await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
-                    logDebug_ACU(`Deleted ${uidsToDelete.length} old person-related lorebook entries.`);
-                }
-            }
-            // --- 2. 全量重建 ---
-            const projectedPersons = importantPersonsTable?.content?.length > 0 ? projectWorldbookTable_ACU(importantPersonsTable) : { headers: [], rows: [] };
-            const personRows = projectedPersons.rows;
-            if (personRows.length === 0) {
-                logDebug_ACU('No important persons to create entries for.');
-                return; // 如果没有人物，删除后直接返回
-            }
-            const headers = projectedPersons.headers;
-            const nameColumnIndex = headers.indexOf('姓名') !== -1 ? headers.indexOf('姓名') : headers.indexOf('角色名');
-            if (nameColumnIndex === -1) {
-                logError_ACU('Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.');
-                return;
-            }
-            const personEntriesToCreate = [];
-            const personNames = [];
-            // 2.1 准备要创建的人物条目
-            const buildPersonNameKeywords_ACU = (rawName) => {
-                const raw = String(rawName || '').trim();
-                if (!raw)
-                    return [];
-                const baseParts = splitKeywordsByComma_ACU(raw);
-                const parts = baseParts.length > 0 ? baseParts : [raw];
-                const keys = [];
-                parts.forEach(part => {
-                    if (!part)
-                        return;
-                    keys.push(part);
-                    const bracketMatch = part.match(/^([^（(]+)[（(]/);
-                    if (bracketMatch) {
-                        const nameBeforeBracket = bracketMatch[1].trim();
-                        if (nameBeforeBracket && nameBeforeBracket !== part) {
-                            keys.push(nameBeforeBracket);
-                        }
-                    }
-                });
-                return [...new Set(keys)];
-            };
-            personRows.forEach((row, i) => {
-                const personName = row[nameColumnIndex];
-                if (!personName)
-                    return;
-                personNames.push(personName);
-                // [优化] 生成关键词：英文逗号分割为多关键词；每个关键词保留括号前的部分
-                const keys = buildPersonNameKeywords_ACU(personName);
-                const content = `| ${row.join(' | ')} |`;
-                const newEntryData = applyPlacementToEntry_ACU({
-                    comment: `${PERSON_ENTRY_PREFIX}${i + 1}`,
-                    content: content,
-                    keys: keys,
-                    enabled: true,
-                    type: 'keyword',
-                    // [优化] order(插入深度) 避免与任何现有条目重复（人物条目按序分配）
-                    order: null,
-                    prevent_recursion: true
-                }, personsEntryPlacement);
-                personEntriesToCreate.push(newEntryData);
-            });
-            // 2.1.5 创建重要人物表表头条目
-            const personsHeaderContent = `# ${importantPersonsTable.name}\n\n| ${headers.join(' | ')} |\n|${headers.map(() => '---').join('|')}|`;
-            const personsHeaderEntryData = applyPlacementToEntry_ACU({
-                // [修复] 外部导入时 PersonsHeader 也必须带外部导入前缀，避免被清理逻辑误删
-                comment: isoPrefix + (isImport ? `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader` : 'TavernDB-ACU-PersonsHeader'),
-                content: personsHeaderContent,
-                keys: [isoPrefix + (isImport ? `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader-Key` : 'TavernDB-ACU-PersonsHeader-Key')],
-                enabled: true,
-                type: 'constant',
-                order: null,
-                prevent_recursion: true
-            }, personsEntryPlacement);
-            personEntriesToCreate.unshift(personsHeaderEntryData);
-            // 2.2 准备要创建的索引条目
-            let indexContent = "# 以下是之前剧情中登场过的角色\n\n";
-            indexContent += `| ${headers[nameColumnIndex]} |\n|---|\n` + personNames.map(name => `| ${name} |`).join('\n');
-            // indexContent 已是纯文本，由 Wrapper 条目包裹
-            const indexEntryData = {
-                comment: PERSON_INDEX_COMMENT,
-                content: indexContent,
-                keys: [PERSON_INDEX_COMMENT + "-Key"],
-                enabled: true,
-                type: 'constant',
-                order: null,
-                prevent_recursion: true
-            };
-            // 3. 执行创建
-            // [优化] 重要人物表 3-depth 成组对齐：
-            // - PersonsHeader / 人物行条目 / PersonsIndex 只占用连续 3 个 order(深度)
-            // - 人物行条目共用同一个深度（不再每人占一个深度）
-            const personsOrderBlockBase = allocConsecutiveOrderBlock_ACU(usedOrders, 3, Math.max(1, personsEntryPlacement.order - 1), 1, 99999);
-            personEntriesToCreate[0].order = personsOrderBlockBase; // header
-            for (let i = 1; i < personEntriesToCreate.length; i++) {
-                personEntriesToCreate[i].order = personsOrderBlockBase + 1; // all persons share
-            }
-            indexEntryData.order = personsOrderBlockBase + 2; // index/footer
-            const allCreates = [...personEntriesToCreate, applyPlacementToEntry_ACU(indexEntryData, personsIndexPlacement)];
-            if (allCreates.length > 0) {
-                await createLorebookEntries_ACU(primaryLorebookName, allCreates);
-                logDebug_ACU(`Successfully created ${allCreates.length} new person-related entries.`);
-                // [兜底] 创建完成后强制回写 order，避免创建接口自动改写导致仍然"每人一深度"
-                try {
-                    const latest = await getLorebookEntries_ACU(primaryLorebookName);
-                    const header = latest.find(e => e.comment === personsHeaderEntryData.comment);
-                    const index = latest.find(e => e.comment === PERSON_INDEX_COMMENT);
-                    const rows = latest.filter(e => (e?.comment || '').startsWith(PERSON_ENTRY_PREFIX));
-                    const updates = [];
-                    if (header?.uid)
-                        updates.push(applyPlacementToEntry_ACU({ uid: header.uid, order: personsOrderBlockBase }, personsEntryPlacement));
-                    rows.forEach(e => { if (e?.uid)
-                        updates.push(applyPlacementToEntry_ACU({ uid: e.uid, order: personsOrderBlockBase + 1 }, personsEntryPlacement)); });
-                    if (index?.uid)
-                        updates.push(applyPlacementToEntry_ACU({ uid: index.uid, order: personsOrderBlockBase + 2 }, personsIndexPlacement));
-                    if (updates.length > 0) {
-                        await setLorebookEntries_ACU(primaryLorebookName, updates);
-                    }
-                }
-                catch (e) {
-                    logWarn_ACU('[PersonsOrderFix] Failed to enforce grouped orders for important persons:', e);
-                }
-            }
-        }
-        catch (error) {
-            logError_ACU('Failed to update important persons related lorebook entries:', error);
-        }
     }
 
     function normalizeScopePart_ACU(value, fallback) {
@@ -81548,8 +81707,9 @@ $CONTENT
                     const use3DepthWrapperGroup = !!(useWrapperEntries && (hasWrapperBefore || hasWrapperAfter));
                     const needsHeader = (!use3DepthWrapperGroup && mainHeaders.length > 0);
                     const hasExtraIndexEntry = !!(extraIndexSpec && extraIndexSpec.indexCols.length > 0);
-                    const blockSpan = (use3DepthWrapperGroup ? 3 : (needsHeader ? 2 : 1));
                     const leadingSlots = (use3DepthWrapperGroup && hasWrapperBefore) ? 1 : ((!useWrapperEntries && mainHeaders.length > 0) ? 1 : 0);
+                    const trailingSlots = (use3DepthWrapperGroup && hasWrapperAfter) ? 1 : 0;
+                    const blockSpan = leadingSlots + mainRows.length + trailingSlots;
                     const preferredMainOrder = toIntOrFallback_ACU(entryPlacement.order, nextCustomExportOrder);
                     const preferredBlockStart = calcPreferredBlockStart_ACU(preferredMainOrder, leadingSlots, nextCustomExportOrder);
                     const baseOrder = allocConsecutiveOrderBlock_ACU(usedOrders, Math.max(1, blockSpan), preferredBlockStart, 1, 99999);
@@ -81576,7 +81736,6 @@ $CONTENT
                             comment: headerName, content: headerMarkdown, keys: [], enabled: true, type: 'constant', prevent_recursion: true, order: orderCursor++
                         }, entryPlacement));
                     }
-                    const dataOrder = orderCursor++;
                     mainRows.forEach((rowData, i) => {
                         const entryName = config.entryName ? `${config.entryName}-${i + 1}` : `${tableName}-${i + 1}`;
                         let keys = [];
@@ -81598,14 +81757,15 @@ $CONTENT
                         }
                         if (config.entryType === 'keyword' && keys.length === 0)
                             return;
+                        const rowOrder = orderCursor++;
                         const rowTableMarkdown = mainHeaders.length > 0 ? `| ${rowData.join(' | ')} |\n` : '';
                         const finalContent = buildEntryContent(entryName, rowTableMarkdown, config.injectionTemplate, useWrapperEntries, null, true);
                         const fullComment = getImportEntryName(entryName, { ...markerBase, role: 'row', rowIndex: i + 1 });
                         newGeneratedNames.push(fullComment);
-                        postCreateOrderFixPlan.push({ comment: fullComment, order: dataOrder, placement: entryPlacement });
+                        postCreateOrderFixPlan.push({ comment: fullComment, order: rowOrder, placement: entryPlacement });
                         rowEntries.push(applyPlacementToEntry_ACU({
                             comment: fullComment, content: finalContent, keys: keys, enabled: true,
-                            type: config.entryType || 'constant', prevent_recursion: config.preventRecursion !== false, order: dataOrder
+                            type: config.entryType || 'constant', prevent_recursion: config.preventRecursion !== false, order: rowOrder
                         }, entryPlacement));
                     });
                     if (use3DepthWrapperGroup && hasWrapperAfter) {
@@ -142420,8 +142580,8 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_14$6 = { class: "acu-agent-advanced__section-head" };
     const _hoisted_15$6 = { class: "acu-agent-advanced__prompt-scope" };
     const _hoisted_16$6 = { class: "acu-agent-advanced__prompt-actions" };
-    const _hoisted_17$5 = { class: "acu-agent-advanced__prompt-head" };
-    const _hoisted_18$5 = { class: "acu-agent-advanced__prompt-head" };
+    const _hoisted_17$6 = { class: "acu-agent-advanced__prompt-head" };
+    const _hoisted_18$6 = { class: "acu-agent-advanced__prompt-head" };
     function _sfc_render$o(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuDrawer"], {
 		"is-open": $props.open,
@@ -142662,7 +142822,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					Fragment,
 					{ key: 1 },
 					[
-						createBaseVNode("div", _hoisted_17$5, [createBaseVNode(
+						createBaseVNode("div", _hoisted_17$6, [createBaseVNode(
 							"h5",
 							null,
 							toDisplayString($setup.plotCopy.agentControl.prompts.decisionTitle),
@@ -142691,7 +142851,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							onMove: _cache[3] || (_cache[3] = (index, delta) => $setup.movePromptSegment("decision", index, delta)),
 							onUpdate: _cache[4] || (_cache[4] = (index, patch) => $setup.updatePromptSegment("decision", index, patch))
 						}, null, 8, ["segments", "empty-text"]),
-						createBaseVNode("div", _hoisted_18$5, [createBaseVNode(
+						createBaseVNode("div", _hoisted_18$6, [createBaseVNode(
 							"h5",
 							null,
 							toDisplayString($setup.plotCopy.agentControl.prompts.skillifyTitle),
@@ -147939,15 +148099,15 @@ Expected function or array of functions, received type ${typeof value}.`
     	"aria-labelledby": "acu-v2-recovery-title"
     };
     const _hoisted_16$5 = { class: "acu-v2-data-mgmt-page__section-description" };
-    const _hoisted_17$4 = { class: "acu-v2-data-mgmt-page__checkpoint-actions" };
-    const _hoisted_18$4 = {
+    const _hoisted_17$5 = { class: "acu-v2-data-mgmt-page__checkpoint-actions" };
+    const _hoisted_18$5 = {
     	key: 3,
     	class: "acu-v2-data-mgmt-page__checkpoint-section",
     	"aria-labelledby": "acu-v2-isolation-diagnostics-title"
     };
-    const _hoisted_19$4 = { class: "acu-v2-data-mgmt-page__form-stack" };
-    const _hoisted_20$3 = { key: 0 };
-    const _hoisted_21$3 = { key: 1 };
+    const _hoisted_19$5 = { class: "acu-v2-data-mgmt-page__form-stack" };
+    const _hoisted_20$4 = { key: 0 };
+    const _hoisted_21$4 = { key: 1 };
     const _hoisted_22$2 = {
     	key: 4,
     	class: "acu-v2-data-mgmt-page__checkpoint-section acu-v2-data-mgmt-page__sqlite-runtime-section",
@@ -148319,7 +148479,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						1
     						/* TEXT */
     					),
-    					createBaseVNode("div", _hoisted_17$4, [
+    					createBaseVNode("div", _hoisted_17$5, [
     						createVNode($setup["AcuButton"], {
     							block: "",
     							disabled: !!$setup.flow.busyAction.value || $setup.runtimeDiagnostic.busy.value,
@@ -148364,7 +148524,7 @@ Expected function or array of functions, received type ${typeof value}.`
     						}, 8, ["disabled", "loading"])) : createCommentVNode("v-if", true)
     					])
     				])) : createCommentVNode("v-if", true),
-    				$setup.flow.v2IsolationDiagnostics.value.length ? (openBlock(), createElementBlock("section", _hoisted_18$4, [_cache[30] || (_cache[30] = createBaseVNode(
+    				$setup.flow.v2IsolationDiagnostics.value.length ? (openBlock(), createElementBlock("section", _hoisted_18$5, [_cache[30] || (_cache[30] = createBaseVNode(
     					"h3",
     					{
     						id: "acu-v2-isolation-diagnostics-title",
@@ -148373,7 +148533,7 @@ Expected function or array of functions, received type ${typeof value}.`
     					"V2 隔离域恢复诊断",
     					-1
     					/* CACHED */
-    				)), createBaseVNode("div", _hoisted_19$4, [(openBlock(true), createElementBlock(
+    				)), createBaseVNode("div", _hoisted_19$5, [(openBlock(true), createElementBlock(
     					Fragment,
     					null,
     					renderList($setup.flow.v2IsolationDiagnostics.value, (diagnostic) => {
@@ -148395,7 +148555,7 @@ Expected function or array of functions, received type ${typeof value}.`
     								1
     								/* TEXT */
     							),
-    							!diagnostic.isCurrentIsolation ? (openBlock(), createElementBlock("p", _hoisted_20$3, "请切换到该隔离域后重新诊断；当前恢复提交不会跨隔离域执行。")) : diagnostic.status.startsWith("recoverable_") ? (openBlock(), createElementBlock("p", _hoisted_21$3, "当前隔离域存在可恢复候选，请使用下方“诊断 V2 数据恢复”生成可提交计划。")) : createCommentVNode("v-if", true)
+    							!diagnostic.isCurrentIsolation ? (openBlock(), createElementBlock("p", _hoisted_20$4, "请切换到该隔离域后重新诊断；当前恢复提交不会跨隔离域执行。")) : diagnostic.status.startsWith("recoverable_") ? (openBlock(), createElementBlock("p", _hoisted_21$4, "当前隔离域存在可恢复候选，请使用下方“诊断 V2 数据恢复”生成可提交计划。")) : createCommentVNode("v-if", true)
     						]);
     					}),
     					128
@@ -150628,11 +150788,11 @@ Expected function or array of functions, received type ${typeof value}.`
     };
     const _hoisted_15$4 = { class: "acu-v2-advanced-tools-page__log-meta acu-v2-advanced-tools-page__sql-history-meta" };
     const _hoisted_16$4 = { class: "acu-v2-advanced-tools-page__log-time" };
-    const _hoisted_17$3 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
-    const _hoisted_18$3 = { class: "acu-v2-advanced-tools-page__filter-grid" };
-    const _hoisted_19$3 = { class: "acu-v2-advanced-tools-page__log-control-row" };
-    const _hoisted_20$2 = { class: "acu-v2-advanced-tools-page__log-control-main" };
-    const _hoisted_21$2 = { class: "acu-v2-advanced-tools-page__log-actions" };
+    const _hoisted_17$4 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
+    const _hoisted_18$4 = { class: "acu-v2-advanced-tools-page__filter-grid" };
+    const _hoisted_19$4 = { class: "acu-v2-advanced-tools-page__log-control-row" };
+    const _hoisted_20$3 = { class: "acu-v2-advanced-tools-page__log-control-main" };
+    const _hoisted_21$3 = { class: "acu-v2-advanced-tools-page__log-actions" };
     const _hoisted_22$1 = { class: "acu-v2-advanced-tools-page__toggles" };
     const _hoisted_23$1 = { class: "acu-v2-advanced-tools-page__hint" };
     const _hoisted_24$1 = {
@@ -150876,7 +151036,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								_: 2
 							}, 1032, ["variant"])]), createBaseVNode(
 								"code",
-								_hoisted_17$3,
+								_hoisted_17$4,
 								toDisplayString(item.sql),
 								1
 								/* TEXT */
@@ -150922,7 +151082,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				}, 8, ["variant"])
 			]),
 			default: withCtx(() => [
-				createBaseVNode("div", _hoisted_18$3, [
+				createBaseVNode("div", _hoisted_18$4, [
 					createVNode($setup["AcuFormRow"], null, {
 						default: withCtx(() => [createVNode($setup["AcuSelect"], {
 							options: $setup.logFlow.levelOptions,
@@ -150949,7 +151109,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						_: 1
 					})
 				]),
-				createBaseVNode("div", _hoisted_19$3, [createBaseVNode("div", _hoisted_20$2, [createBaseVNode("div", _hoisted_21$2, [
+				createBaseVNode("div", _hoisted_19$4, [createBaseVNode("div", _hoisted_20$3, [createBaseVNode("div", _hoisted_21$3, [
 					createVNode($setup["AcuButton"], {
 						variant: $setup.logFlow.paused.value ? "primary" : "default",
 						onClick: _cache[3] || (_cache[3] = ($event) => $setup.logFlow.setPaused(!$setup.logFlow.paused.value))
@@ -157998,20 +158158,20 @@ Expected function or array of functions, received type ${typeof value}.`
 	key: 3,
 	class: "acu-viz-assistant__turn-diff"
     };
-    const _hoisted_17$2 = {
+    const _hoisted_17$3 = {
 	key: 4,
 	class: "acu-viz-assistant__turn-apply"
     };
-    const _hoisted_18$2 = {
+    const _hoisted_18$3 = {
 	key: 0,
 	class: "acu-viz-assistant__turn-risk"
     };
-    const _hoisted_19$2 = {
+    const _hoisted_19$3 = {
 	key: 2,
 	class: "acu-viz-assistant__apply-reason"
     };
-    const _hoisted_20$1 = { class: "acu-viz-assistant__composer" };
-    const _hoisted_21$1 = { class: "acu-viz-assistant__composer-actions" };
+    const _hoisted_20$2 = { class: "acu-viz-assistant__composer" };
+    const _hoisted_21$2 = { class: "acu-viz-assistant__composer-actions" };
     function _sfc_render$7(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$7, [
 		createBaseVNode("div", _hoisted_2$6, [createVNode($setup["AcuPanel"], {
@@ -158304,8 +158464,8 @@ Expected function or array of functions, received type ${typeof value}.`
 									128
 									/* KEYED_FRAGMENT */
 								))])) : createCommentVNode("v-if", true),
-								turn.type === "round" || turn.type === "final" ? (openBlock(), createElementBlock("div", _hoisted_17$2, [
-									$setup.assistant.getTurnHighRiskItems(turn).length ? (openBlock(), createElementBlock("div", _hoisted_18$2, [_cache[17] || (_cache[17] = createBaseVNode(
+								turn.type === "round" || turn.type === "final" ? (openBlock(), createElementBlock("div", _hoisted_17$3, [
+									$setup.assistant.getTurnHighRiskItems(turn).length ? (openBlock(), createElementBlock("div", _hoisted_18$3, [_cache[17] || (_cache[17] = createBaseVNode(
 										"h4",
 										null,
 										"高风险确认",
@@ -158352,7 +158512,7 @@ Expected function or array of functions, received type ${typeof value}.`
 									])) : createCommentVNode("v-if", true),
 									$setup.assistant.getTurnApplyPayload(turn) && $setup.assistant.getTurnApplyBlockReason(turn) ? (openBlock(), createElementBlock(
 										"p",
-										_hoisted_19$2,
+										_hoisted_19$3,
 										toDisplayString($setup.assistant.getTurnApplyBlockReason(turn)),
 										1
 										/* TEXT */
@@ -158370,7 +158530,7 @@ Expected function or array of functions, received type ${typeof value}.`
 			512
 			/* NEED_PATCH */
 		),
-		createBaseVNode("div", _hoisted_20$1, [createVNode($setup["AcuTextarea"], {
+		createBaseVNode("div", _hoisted_20$2, [createVNode($setup["AcuTextarea"], {
 			class: "acu-viz-assistant__composer-input",
 			"model-value": $setup.assistant.userRequest.value,
 			rows: 2,
@@ -158379,7 +158539,7 @@ Expected function or array of functions, received type ${typeof value}.`
 			disabled: $setup.assistant.isRunning.value,
 			placeholder: "描述你想怎么改表。例如：给角色状态表新增“短期目标”和“风险提示”两列。",
 			"onUpdate:modelValue": _cache[2] || (_cache[2] = (value) => $setup.assistant.userRequest.value = value)
-		}, null, 8, ["model-value", "disabled"]), createBaseVNode("div", _hoisted_21$1, [$setup.assistant.isRunning.value ? (openBlock(), createBlock($setup["AcuButton"], {
+		}, null, 8, ["model-value", "disabled"]), createBaseVNode("div", _hoisted_21$2, [$setup.assistant.isRunning.value ? (openBlock(), createBlock($setup["AcuButton"], {
 			key: 0,
 			variant: "danger",
 			size: "sm",
@@ -158566,17 +158726,28 @@ Expected function or array of functions, received type ${typeof value}.`
                     return '未识别编码索引列，将按默认方式处理';
                 return `当前识别列：#${info.index + 1} ${info.header || '未命名列'}`;
             });
+            const isSplitKeywordExport = computed(() => {
+                return exportConfig.value.enabled === true &&
+                    exportConfig.value.splitByRow === true &&
+                    exportConfig.value.entryType === 'keyword';
+            });
+            const filterColumnOptions = computed(() => {
+                return [
+                    { label: '(未选择)', value: '' },
+                    ...config.headers.value.map(h => ({ label: h, value: h })),
+                ];
+            });
             function validateDDL() {
                 ddlValidation.value = config.validateDDL();
             }
-            const __returned__ = { config, ddlValidation, sqlInjectionTemplatePlaceholder, updateConfig, sourceData, sendRowsSqlTemplatePlaceholder, exportConfig, extraIndexColumns, extraIndexColumnModes, specialIndexLabel, validateDDL, AcuBadge, AcuButton, AcuCheckbox, AcuFormRow, AcuIconButton, AcuInput, AcuPanel, AcuSelect, AcuTextarea, PlacementEditor };
+            const __returned__ = { config, ddlValidation, sqlInjectionTemplatePlaceholder, updateConfig, sourceData, sendRowsSqlTemplatePlaceholder, exportConfig, extraIndexColumns, extraIndexColumnModes, specialIndexLabel, isSplitKeywordExport, filterColumnOptions, validateDDL, AcuBadge, AcuButton, AcuCheckbox, AcuFormRow, AcuIconButton, AcuInput, AcuPanel, AcuSelect, AcuTextarea, PlacementEditor };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-viz-config[data-v-857e2cdf] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\n.acu-viz-config__grid[data-v-857e2cdf] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-viz-config__grid--three[data-v-857e2cdf] {\r\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns[data-v-857e2cdf],\r\n.acu-viz-config__prompts[data-v-857e2cdf],\r\n.acu-viz-config__toggles[data-v-857e2cdf],\r\n.acu-viz-config__subsection[data-v-857e2cdf],\r\n.acu-viz-config__column-modes[data-v-857e2cdf] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 10px;\n}\n.acu-viz-config__columns[data-v-857e2cdf] {\r\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation[data-v-857e2cdf] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  padding-top: 2px;\n}\n.acu-viz-config__column-row[data-v-857e2cdf] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 42px minmax(0, 1fr) auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index[data-v-857e2cdf] {\r\n  color: var(--acu-text-3);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-viz-config__empty[data-v-857e2cdf] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions[data-v-857e2cdf],\r\n.acu-viz-config__column-mode[data-v-857e2cdf] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-viz-config__inline-actions[data-v-857e2cdf] {\r\n  margin-top: 10px;\n}\n.acu-viz-config__ddl[data-v-857e2cdf] {\r\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode[data-v-857e2cdf] {\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode[data-v-857e2cdf] .acu-checkbox {\r\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode[data-v-857e2cdf] .acu-select {\r\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid[data-v-857e2cdf],\r\n  .acu-viz-config__grid--three[data-v-857e2cdf] {\r\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation[data-v-857e2cdf] {\r\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation[data-v-857e2cdf] .acu-btn {\r\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row[data-v-857e2cdf] {\r\n    grid-template-columns: 34px minmax(0, 1fr) auto;\r\n    padding: 7px;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0-857e2cdf");
-    var VisualizerConfigPanels_vue_vue_type_style_index_0_scoped_857e2cdf_lang = null;
+    injectSfcStyle("\n.acu-viz-config[data-v-c0a36bff] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 12px;\n}\n.acu-viz-config__grid[data-v-c0a36bff] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-viz-config__grid--three[data-v-c0a36bff] {\r\n  grid-template-columns: repeat(3, minmax(0, 1fr));\n}\n.acu-viz-config__columns[data-v-c0a36bff],\r\n.acu-viz-config__prompts[data-v-c0a36bff],\r\n.acu-viz-config__toggles[data-v-c0a36bff],\r\n.acu-viz-config__subsection[data-v-c0a36bff],\r\n.acu-viz-config__column-modes[data-v-c0a36bff] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 10px;\n}\n.acu-viz-config__columns[data-v-c0a36bff] {\r\n  margin-top: 12px;\n}\n.acu-viz-config__column-operation[data-v-c0a36bff] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  padding-top: 2px;\n}\n.acu-viz-config__column-row[data-v-c0a36bff] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 42px minmax(0, 1fr) auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-index[data-v-c0a36bff] {\r\n  color: var(--acu-text-3);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-viz-config__empty[data-v-c0a36bff],\r\n.acu-viz-config__hint[data-v-c0a36bff] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-viz-config__inline-actions[data-v-c0a36bff],\r\n.acu-viz-config__column-mode[data-v-c0a36bff] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\n}\n.acu-viz-config__inline-actions[data-v-c0a36bff] {\r\n  margin-top: 10px;\n}\n.acu-viz-config__ddl[data-v-c0a36bff] {\r\n  font-family: var(--acu-font-mono);\n}\n.acu-viz-config__column-mode[data-v-c0a36bff] {\r\n  padding: 8px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-0);\n}\n.acu-viz-config__column-mode[data-v-c0a36bff] .acu-checkbox {\r\n  flex: 1 1 220px;\n}\n.acu-viz-config__column-mode[data-v-c0a36bff] .acu-select {\r\n  flex: 1 1 260px;\n}\n@media (max-width: 860px) {\n.acu-viz-config__grid[data-v-c0a36bff],\r\n  .acu-viz-config__grid--three[data-v-c0a36bff] {\r\n    grid-template-columns: 1fr;\n}\n}\n@media (max-width: 767px) {\n.acu-viz-config__column-operation[data-v-c0a36bff] {\r\n    justify-content: stretch;\n}\n.acu-viz-config__column-operation[data-v-c0a36bff] .acu-btn {\r\n    width: 100%;\n}\n}\n@media (max-width: 520px) {\n.acu-viz-config__column-row[data-v-c0a36bff] {\r\n    grid-template-columns: 34px minmax(0, 1fr) auto;\r\n    padding: 7px;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerConfigPanels.vue#style-0-c0a36bff");
+    var VisualizerConfigPanels_vue_vue_type_style_index_0_scoped_c0a36bff_lang = null;
 
     const _hoisted_1$5 = {
 	class: "acu-viz-config",
@@ -158596,10 +158767,21 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_10$2 = { class: "acu-viz-config__toggles" };
     const _hoisted_11$2 = { class: "acu-viz-config__toggles" };
     const _hoisted_12$2 = { class: "acu-viz-config__grid" };
-    const _hoisted_13$2 = { class: "acu-viz-config__subsection" };
-    const _hoisted_14$2 = { class: "acu-viz-config__grid" };
-    const _hoisted_15$2 = { class: "acu-viz-config__column-modes" };
+    const _hoisted_13$2 = {
+	key: 0,
+	class: "acu-viz-config__subsection"
+    };
+    const _hoisted_14$2 = { class: "acu-viz-config__grid acu-viz-config__grid--three" };
+    const _hoisted_15$2 = { class: "acu-viz-config__grid" };
     const _hoisted_16$2 = { class: "acu-viz-config__toggles" };
+    const _hoisted_17$2 = {
+	key: 0,
+	class: "acu-viz-config__hint"
+    };
+    const _hoisted_18$2 = { class: "acu-viz-config__subsection" };
+    const _hoisted_19$2 = { class: "acu-viz-config__grid" };
+    const _hoisted_20$1 = { class: "acu-viz-config__column-modes" };
+    const _hoisted_21$1 = { class: "acu-viz-config__toggles" };
     function _sfc_render$5(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$5, [
 		createVNode($setup["AcuPanel"], {
@@ -158661,7 +158843,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					variant: "primary",
 					onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("request-add-column"))
 				}, {
-					default: withCtx(() => [..._cache[26] || (_cache[26] = [createBaseVNode(
+					default: withCtx(() => [..._cache[33] || (_cache[33] = [createBaseVNode(
 						"i",
 						{ class: "fa-solid fa-plus" },
 						null,
@@ -158829,7 +159011,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				size: "sm",
 				onClick: $setup.validateDDL
 			}, {
-				default: withCtx(() => [..._cache[27] || (_cache[27] = [createBaseVNode(
+				default: withCtx(() => [..._cache[34] || (_cache[34] = [createBaseVNode(
 					"i",
 					{ class: "fa-solid fa-check-circle" },
 					null,
@@ -158936,18 +159118,105 @@ Expected function or array of functions, received type ${typeof value}.`
 							"options",
 							"update-field"
 						]),
-						createBaseVNode("div", _hoisted_13$2, [createVNode($setup["AcuCheckbox"], {
+						$setup.isSplitKeywordExport ? (openBlock(), createElementBlock("div", _hoisted_13$2, [createVNode($setup["AcuCheckbox"], {
+							"model-value": $setup.exportConfig.dynamicWindowEnabled === true,
+							label: "启用填表按需动态行窗口（大表优化）",
+							"onUpdate:modelValue": _cache[23] || (_cache[23] = (value) => $setup.config.updateExportConfig("dynamicWindowEnabled", value))
+						}, null, 8, ["model-value"]), $setup.exportConfig.dynamicWindowEnabled === true ? (openBlock(), createElementBlock(
+							Fragment,
+							{ key: 0 },
+							[
+								_cache[35] || (_cache[35] = createBaseVNode(
+									"p",
+									{ class: "acu-viz-config__hint" },
+									" 当全表总行数超过激活门槛时，填表阶段不再全量发送数据，而是根据“状态列常驻”、“最新行保底”和“上下文关键词召回”取并集发送。 ",
+									-1
+									/* CACHED */
+								)),
+								createBaseVNode("div", _hoisted_14$2, [
+									createVNode($setup["AcuFormRow"], {
+										label: "激活门槛（总行数）",
+										hint: "小于等于此行数时全量发送，超过时按需动态过滤"
+									}, {
+										default: withCtx(() => [createVNode($setup["AcuInput"], {
+											type: "number",
+											"model-value": $setup.exportConfig.dynamicWindowThreshold ?? 20,
+											min: 1,
+											step: 1,
+											"onUpdate:modelValue": _cache[24] || (_cache[24] = (value) => $setup.config.updateExportConfig("dynamicWindowThreshold", Number(value) || 20))
+										}, null, 8, ["model-value"])]),
+										_: 1
+									}),
+									createVNode($setup["AcuFormRow"], {
+										label: "最新新增保底（行数）",
+										hint: "始终携带最后新增的 m 行，填 0 禁用"
+									}, {
+										default: withCtx(() => [createVNode($setup["AcuInput"], {
+											type: "number",
+											"model-value": $setup.exportConfig.dynamicWindowLatestRows ?? 2,
+											min: 0,
+											step: 1,
+											"onUpdate:modelValue": _cache[25] || (_cache[25] = (value) => $setup.config.updateExportConfig("dynamicWindowLatestRows", Number(value) >= 0 ? Number(value) : 0))
+										}, null, 8, ["model-value"])]),
+										_: 1
+									}),
+									createVNode($setup["AcuFormRow"], {
+										label: "关键词扫描（轮数）",
+										hint: "最新 n 轮对话中出现实体关键词即激活召回"
+									}, {
+										default: withCtx(() => [createVNode($setup["AcuInput"], {
+											type: "number",
+											"model-value": $setup.exportConfig.dynamicWindowKeywordRounds ?? 5,
+											min: 1,
+											step: 1,
+											"onUpdate:modelValue": _cache[26] || (_cache[26] = (value) => $setup.config.updateExportConfig("dynamicWindowKeywordRounds", Number(value) >= 1 ? Number(value) : 5))
+										}, null, 8, ["model-value"])]),
+										_: 1
+									})
+								]),
+								createBaseVNode("div", _hoisted_15$2, [createVNode($setup["AcuFormRow"], {
+									label: "状态过滤列",
+									hint: "选择用于常驻判断的列（如“是否离场”）"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuSelect"], {
+										"model-value": $setup.exportConfig.dynamicWindowFilterColumn || "",
+										options: $setup.filterColumnOptions,
+										"onUpdate:modelValue": _cache[27] || (_cache[27] = (value) => $setup.config.updateExportConfig("dynamicWindowFilterColumn", value))
+									}, null, 8, ["model-value", "options"])]),
+									_: 1
+								}), createVNode($setup["AcuFormRow"], {
+									label: "状态目标值",
+									hint: "单元格严格等于该值时常驻发送（如“否”）"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										"model-value": $setup.exportConfig.dynamicWindowFilterValue || "",
+										placeholder: "如：否",
+										"onUpdate:modelValue": _cache[28] || (_cache[28] = (value) => $setup.config.updateExportConfig("dynamicWindowFilterValue", value))
+									}, null, 8, ["model-value"])]),
+									_: 1
+								})]),
+								createBaseVNode("div", _hoisted_16$2, [createVNode($setup["AcuCheckbox"], {
+									"model-value": $setup.exportConfig.dynamicWindowPreventDuplicateInsert === true,
+									label: "唯一键防重拦截（高级 / 默认关闭）",
+									"onUpdate:modelValue": _cache[29] || (_cache[29] = (value) => $setup.config.updateExportConfig("dynamicWindowPreventDuplicateInsert", value))
+								}, null, 8, ["model-value"])]),
+								$setup.exportConfig.dynamicWindowPreventDuplicateInsert === true ? (openBlock(), createElementBlock("p", _hoisted_17$2, " 开启后，当 AI 误新增底表中已存在的实体（基于关键词列严格全等比对）时，将安全丢弃该次新增指令，保持老卡原样不变。 ")) : createCommentVNode("v-if", true)
+							],
+							64
+							/* STABLE_FRAGMENT */
+						)) : createCommentVNode("v-if", true)])) : createCommentVNode("v-if", true),
+						createBaseVNode("div", _hoisted_18$2, [createVNode($setup["AcuCheckbox"], {
 							"model-value": $setup.exportConfig.extraIndexEnabled === true,
 							label: "额外增加索引条目",
-							"onUpdate:modelValue": _cache[23] || (_cache[23] = (value) => $setup.config.updateExportConfig("extraIndexEnabled", value))
+							"onUpdate:modelValue": _cache[30] || (_cache[30] = (value) => $setup.config.updateExportConfig("extraIndexEnabled", value))
 						}, null, 8, ["model-value"]), $setup.exportConfig.extraIndexEnabled ? (openBlock(), createElementBlock(
 							Fragment,
 							{ key: 0 },
 							[
-								createBaseVNode("div", _hoisted_14$2, [createVNode($setup["AcuFormRow"], { label: "索引条目名称" }, {
+								createBaseVNode("div", _hoisted_19$2, [createVNode($setup["AcuFormRow"], { label: "索引条目名称" }, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										"model-value": $setup.exportConfig.extraIndexEntryName || "",
-										"onUpdate:modelValue": _cache[24] || (_cache[24] = (value) => $setup.config.updateExportConfig("extraIndexEntryName", value))
+										"onUpdate:modelValue": _cache[31] || (_cache[31] = (value) => $setup.config.updateExportConfig("extraIndexEntryName", value))
 									}, null, 8, ["model-value"])]),
 									_: 1
 								})]),
@@ -158955,11 +159224,11 @@ Expected function or array of functions, received type ${typeof value}.`
 									default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 										"model-value": $setup.exportConfig.extraIndexInjectionTemplate || "",
 										rows: 3,
-										"onUpdate:modelValue": _cache[25] || (_cache[25] = (value) => $setup.config.updateExportConfig("extraIndexInjectionTemplate", value))
+										"onUpdate:modelValue": _cache[32] || (_cache[32] = (value) => $setup.config.updateExportConfig("extraIndexInjectionTemplate", value))
 									}, null, 8, ["model-value"])]),
 									_: 1
 								}),
-								createBaseVNode("div", _hoisted_15$2, [(openBlock(true), createElementBlock(
+								createBaseVNode("div", _hoisted_20$1, [(openBlock(true), createElementBlock(
 									Fragment,
 									null,
 									renderList($setup.config.visibleColumnEntries.value, (column) => {
@@ -159043,7 +159312,7 @@ Expected function or array of functions, received type ${typeof value}.`
 			title: "编码索引自动编号",
 			description: "用于维护总结表、总体大纲里的 AM0001 这类编码。开启后会自动重排；关闭后需要你自己保持唯一和顺序。"
 		}, {
-			default: withCtx(() => [createBaseVNode("div", _hoisted_16$2, [createVNode($setup["AcuCheckbox"], {
+			default: withCtx(() => [createBaseVNode("div", _hoisted_21$1, [createVNode($setup["AcuCheckbox"], {
 				"model-value": $setup.config.specialIndex.value.locked,
 				label: "保存和 AI 更新时自动重排编码",
 				"onUpdate:modelValue": $setup.config.setSpecialIndexLock
@@ -159059,7 +159328,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		})) : createCommentVNode("v-if", true)
 	]);
     }
-    var VisualizerConfigPanels = /*#__PURE__*/ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-857e2cdf"]]);
+    var VisualizerConfigPanels = /*#__PURE__*/ _export_sfc(_sfc_main$5, [["render", _sfc_render$5], ["__scopeId", "data-v-c0a36bff"]]);
 
     var _sfc_main$4 = /*@__PURE__*/ defineComponent({
         __name: 'VisualizerGlobalInjectionPanels',

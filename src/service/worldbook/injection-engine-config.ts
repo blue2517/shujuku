@@ -100,6 +100,13 @@ export function buildDefaultExportConfig_ACU(tableName = '') {
         extraIndexPlacement: { ...DEFAULT_EXTRA_INDEX_PLACEMENT_ACU },
         fixedEntryPlacement: { ...fixedDefaults.entry },
         fixedIndexPlacement: { ...fixedDefaults.index },
+        dynamicWindowEnabled: false,
+        dynamicWindowThreshold: 20,
+        dynamicWindowFilterColumn: '',
+        dynamicWindowFilterValue: '',
+        dynamicWindowLatestRows: 2,
+        dynamicWindowKeywordRounds: 5,
+        dynamicWindowPreventDuplicateInsert: false,
     };
 }
 

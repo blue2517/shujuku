@@ -43,6 +43,13 @@ export interface SheetExportConfig_ACU {
   fixedEntryPlacement: PlacementConfig_ACU;
   fixedIndexPlacement: PlacementConfig_ACU;
   injectIntoWorldbook?: boolean;
+  dynamicWindowEnabled?: boolean;
+  dynamicWindowThreshold?: number;
+  dynamicWindowFilterColumn?: string;
+  dynamicWindowFilterValue?: string;
+  dynamicWindowLatestRows?: number;
+  dynamicWindowKeywordRounds?: number;
+  dynamicWindowPreventDuplicateInsert?: boolean;
 }
 
 /** 单个表格的源数据描述 */
