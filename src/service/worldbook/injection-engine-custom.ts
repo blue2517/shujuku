@@ -439,13 +439,14 @@ import { projectFlightModeHiddenChronicleRows_ACU } from '../flight-mode/flight-
                   const use3DepthWrapperGroup = !!(useWrapperEntries && (hasWrapperBefore || hasWrapperAfter));
                   const needsHeader = (!use3DepthWrapperGroup && mainHeaders.length > 0);
                   const hasExtraIndexEntry = !!(extraIndexSpec && extraIndexSpec.indexCols.length > 0);
-                  const blockSpan = (use3DepthWrapperGroup ? 3 : (needsHeader ? 2 : 1));
                   const leadingSlots = (use3DepthWrapperGroup && hasWrapperBefore) ? 1 : ((!useWrapperEntries && mainHeaders.length > 0) ? 1 : 0);
+                  const trailingSlots = (use3DepthWrapperGroup && hasWrapperAfter) ? 1 : 0;
+                  const blockSpan = leadingSlots + mainRows.length + trailingSlots;
                   const preferredMainOrder = toIntOrFallback_ACU(entryPlacement.order, nextCustomExportOrder);
                   const preferredBlockStart = calcPreferredBlockStart_ACU(preferredMainOrder, leadingSlots, nextCustomExportOrder);
                   const baseOrder = allocConsecutiveOrderBlock_ACU(usedOrders, Math.max(1, blockSpan), preferredBlockStart, 1, 99999);
                   let orderCursor = baseOrder;
-                  
+
                   // 准备表头markdown
                   const headerMarkdown = mainHeaders.length
                       ? `# ${tableName}\n\n${buildMarkdownTableFromRows_ACU(mainHeaders, [])}`
@@ -469,7 +470,6 @@ import { projectFlightModeHiddenChronicleRows_ACU } from '../flight-mode/flight-
                       }, entryPlacement));
                   }
 
-                  const dataOrder = orderCursor++;
                   mainRows.forEach((rowData: any[], i: number) => {
                       const entryName = config.entryName ? `${config.entryName}-${i + 1}` : `${tableName}-${i + 1}`;
                       let keys: string[] = [];
@@ -486,14 +486,15 @@ import { projectFlightModeHiddenChronicleRows_ACU } from '../flight-mode/flight-
                       }
                       if (config.entryType === 'keyword' && keys.length === 0) return;
 
+                      const rowOrder = orderCursor++;
                       const rowTableMarkdown = mainHeaders.length > 0 ? `| ${rowData.join(' | ')} |\n` : '';
                       const finalContent = buildEntryContent(entryName, rowTableMarkdown, config.injectionTemplate, useWrapperEntries, null, true);
                       const fullComment = getImportEntryName(entryName, { ...markerBase, role: 'row', rowIndex: i + 1 });
                       newGeneratedNames.push(fullComment);
-                      postCreateOrderFixPlan.push({ comment: fullComment, order: dataOrder, placement: entryPlacement });
+                      postCreateOrderFixPlan.push({ comment: fullComment, order: rowOrder, placement: entryPlacement });
                       rowEntries.push(applyPlacementToEntry_ACU({
                           comment: fullComment, content: finalContent, keys: keys, enabled: true,
-                          type: config.entryType || 'constant', prevent_recursion: config.preventRecursion !== false, order: dataOrder
+                          type: config.entryType || 'constant', prevent_recursion: config.preventRecursion !== false, order: rowOrder
                       }, entryPlacement));
                   });
 

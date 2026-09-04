@@ -277,6 +277,74 @@
           :update-field="(field, value) => config.updatePlacement('entryPlacement', field, value)"
         />
 
+        <div v-if="isSplitKeywordExport" class="acu-viz-config__subsection">
+          <AcuCheckbox
+            :model-value="exportConfig.dynamicWindowEnabled === true"
+            label="启用填表按需动态行窗口（大表优化）"
+            @update:model-value="value => config.updateExportConfig('dynamicWindowEnabled', value)"
+          />
+          <template v-if="exportConfig.dynamicWindowEnabled === true">
+            <p class="acu-viz-config__hint">
+              当全表总行数超过激活门槛时，填表阶段不再全量发送数据，而是根据“状态列常驻”、“最新行保底”和“上下文关键词召回”取并集发送。
+            </p>
+            <div class="acu-viz-config__grid acu-viz-config__grid--three">
+              <AcuFormRow label="激活门槛（总行数）" hint="小于等于此行数时全量发送，超过时按需动态过滤">
+                <AcuInput
+                  type="number"
+                  :model-value="exportConfig.dynamicWindowThreshold ?? 20"
+                  :min="1"
+                  :step="1"
+                  @update:model-value="value => config.updateExportConfig('dynamicWindowThreshold', Number(value) || 20)"
+                />
+              </AcuFormRow>
+              <AcuFormRow label="最新新增保底（行数）" hint="始终携带最后新增的 m 行，填 0 禁用">
+                <AcuInput
+                  type="number"
+                  :model-value="exportConfig.dynamicWindowLatestRows ?? 2"
+                  :min="0"
+                  :step="1"
+                  @update:model-value="value => config.updateExportConfig('dynamicWindowLatestRows', Number(value) >= 0 ? Number(value) : 0)"
+                />
+              </AcuFormRow>
+              <AcuFormRow label="关键词扫描（轮数）" hint="最新 n 轮对话中出现实体关键词即激活召回">
+                <AcuInput
+                  type="number"
+                  :model-value="exportConfig.dynamicWindowKeywordRounds ?? 5"
+                  :min="1"
+                  :step="1"
+                  @update:model-value="value => config.updateExportConfig('dynamicWindowKeywordRounds', Number(value) >= 1 ? Number(value) : 5)"
+                />
+              </AcuFormRow>
+            </div>
+            <div class="acu-viz-config__grid">
+              <AcuFormRow label="状态过滤列" hint="选择用于常驻判断的列（如“是否离场”）">
+                <AcuSelect
+                  :model-value="exportConfig.dynamicWindowFilterColumn || ''"
+                  :options="filterColumnOptions"
+                  @update:model-value="value => config.updateExportConfig('dynamicWindowFilterColumn', value)"
+                />
+              </AcuFormRow>
+              <AcuFormRow label="状态目标值" hint="单元格严格等于该值时常驻发送（如“否”）">
+                <AcuInput
+                  :model-value="exportConfig.dynamicWindowFilterValue || ''"
+                  placeholder="如：否"
+                  @update:model-value="value => config.updateExportConfig('dynamicWindowFilterValue', value)"
+                />
+              </AcuFormRow>
+            </div>
+            <div class="acu-viz-config__toggles">
+              <AcuCheckbox
+                :model-value="exportConfig.dynamicWindowPreventDuplicateInsert === true"
+                label="唯一键防重拦截（高级 / 默认关闭）"
+                @update:model-value="value => config.updateExportConfig('dynamicWindowPreventDuplicateInsert', value)"
+              />
+            </div>
+            <p v-if="exportConfig.dynamicWindowPreventDuplicateInsert === true" class="acu-viz-config__hint">
+              开启后，当 AI 误新增底表中已存在的实体（基于关键词列严格全等比对）时，将安全丢弃该次新增指令，保持老卡原样不变。
+            </p>
+          </template>
+        </div>
+
         <div class="acu-viz-config__subsection">
           <AcuCheckbox
             :model-value="exportConfig.extraIndexEnabled === true"
@@ -450,6 +518,19 @@ const specialIndexLabel = computed(() => {
   return `当前识别列：#${info.index + 1} ${info.header || '未命名列'}`;
 });
 
+const isSplitKeywordExport = computed(() => {
+  return exportConfig.value.enabled === true &&
+         exportConfig.value.splitByRow === true &&
+         exportConfig.value.entryType === 'keyword';
+});
+
+const filterColumnOptions = computed(() => {
+  return [
+    { label: '(未选择)', value: '' },
+    ...config.headers.value.map(h => ({ label: h, value: h })),
+  ];
+});
+
 function validateDDL(): void {
   ddlValidation.value = config.validateDDL();
 }
@@ -512,7 +593,8 @@ function validateDDL(): void {
   text-align: right;
 }
 
-.acu-viz-config__empty {
+.acu-viz-config__empty,
+.acu-viz-config__hint {
   margin: 0;
   color: var(--acu-text-2);
   font-size: var(--acu-font-size-body-lg, 13px);

@@ -62,7 +62,11 @@ const {
     ...cfg,
   })),
   mockNormalizePlacementConfig: vi.fn((raw: any, fallback: any) => raw || fallback || { position: 'at_depth_as_system', depth: 2, order: 10000 }),
-  mockApplyPlacementToEntry: vi.fn((entry: any, placement: any) => ({ ...entry, ...placement })),
+  mockApplyPlacementToEntry: vi.fn((entry: any, placement: any) => ({
+    ...entry,
+    position: placement?.position ?? 'at_depth_as_system',
+    ...(placement?.depth !== undefined ? { depth: placement.depth } : {}),
+  })),
   mockBuildUsedOrderSet: vi.fn(() => new Set<number>()),
   mockAllocOrder: vi.fn(() => 10001),
   mockAllocConsecutiveOrderBlock: vi.fn(() => 100),
@@ -485,6 +489,74 @@ describe('updateCustomTableExports_ACU', () => {
         expect.objectContaining({ comment: 'TavernDB-ACU-CustomExport-关系档案-2', keys: ['布莱恩'], type: 'keyword', content: '| 布莱恩 | 对手 |\n' }),
       ]));
       expect(createdEntries.some((entry: any) => String(entry.comment).includes('人物关系表-'))).toBe(false);
+    });
+
+    it('拆分导出带包裹模板时分配连续递增的 Order 且 blockSpan 包含包裹与全部行', async () => {
+      const mergedData: any = {
+        sheet_summary: {
+          name: '纪要',
+          content: [
+            ['', '时间跨度', '地点', '纪要', '编码索引'],
+            ['', '2004年2月2日 15:40-18:30', '深山町', '事件A', 'AM0001'],
+            ['', '2004年2月2日 18:35-19:20', '深山町', '事件B', 'AM0002'],
+          ],
+          exportConfig: {
+            enabled: true,
+            splitByRow: true,
+            entryName: '纪要',
+            entryType: 'constant',
+            injectionTemplate: '<记忆回溯>\n$1\n</记忆回溯>',
+          },
+        },
+      };
+      mockGetSortedSheetKeys.mockReturnValue(['sheet_summary']);
+      mockEnsureExportConfigDefaults.mockReturnValue({
+        enabled: true,
+        splitByRow: true,
+        entryName: '纪要',
+        entryType: 'constant',
+        keywords: '',
+        preventRecursion: true,
+        injectionTemplate: '<记忆回溯>\n$1\n</记忆回溯>',
+        extraIndexEnabled: false,
+        extraIndexColumns: [],
+        extraIndexColumnModes: {},
+        extraIndexInjectionTemplate: '',
+        entryPlacement: { position: 'at_depth_as_system', depth: 999, order: 1000 },
+        extraIndexPlacement: { position: 'at_depth_as_system', depth: 999, order: 8000 },
+      });
+      mockAllocConsecutiveOrderBlock.mockClear();
+      mockAllocConsecutiveOrderBlock.mockReturnValue(1000);
+
+      await updateCustomTableExports_ACU(mergedData);
+
+      // 验证 blockSpan = 包裹上(1) + 行数(2) + 包裹下(1) = 4
+      expect(mockAllocConsecutiveOrderBlock).toHaveBeenCalledWith(
+        expect.anything(),
+        4,
+        expect.anything(),
+        1,
+        99999
+      );
+
+      const createdEntries = mockCreateLorebookEntries.mock.calls[0][1];
+      expect(createdEntries.length).toBe(4);
+
+      const wrapperStart = createdEntries.find((e: any) => e.comment.endsWith('-包裹-上'));
+      const row1 = createdEntries.find((e: any) => e.comment.endsWith('-纪要-1'));
+      const row2 = createdEntries.find((e: any) => e.comment.endsWith('-纪要-2'));
+      const wrapperEnd = createdEntries.find((e: any) => e.comment.endsWith('-包裹-下'));
+
+      expect(wrapperStart).toBeDefined();
+      expect(row1).toBeDefined();
+      expect(row2).toBeDefined();
+      expect(wrapperEnd).toBeDefined();
+
+      // 验证 Order 严格连续递增：包裹上(1000) -> 纪要-1(1001) -> 纪要-2(1002) -> 包裹下(1003)
+      expect(wrapperStart.order).toBe(1000);
+      expect(row1.order).toBe(1001);
+      expect(row2.order).toBe(1002);
+      expect(wrapperEnd.order).toBe(1003);
     });
   });
 

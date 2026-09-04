@@ -567,4 +567,85 @@ describe('parseAndApplyTableEditsToData_ACU', () => {
     ]);
     expect(data.sheet_0.seedRows).toEqual([['', '铁剑'], [null, '药水'], ['fixed', '护符']]);
   });
+
+  describe('唯一键防重拦截 (dynamicWindowPreventDuplicateInsert)', () => {
+    it('未开启防重时，允许插入同名实体', () => {
+      const data = {
+        sheet_0: {
+          uid: 'sheet_0',
+          name: '重要角色表',
+          updateConfig: {},
+          exportConfig: {
+            dynamicWindowPreventDuplicateInsert: false,
+            keywords: '姓名',
+          },
+          sourceData: {},
+          orderNo: 0,
+          content: [
+            ['row_id', '姓名', '是否离场'],
+            ['1', '美狄亚,Caster', '否'],
+          ],
+        },
+      } as any;
+
+      const aiResponse = '<tableEdit>insertRow(0, {"0": "美狄亚,Caster", "1": "否"});</tableEdit>';
+      parseAndApplyTableEditsToData_ACU(aiResponse, data, 'standard');
+
+      expect(data.sheet_0.content.length).toBe(3);
+      expect(data.sheet_0.content[2][1]).toBe('美狄亚,Caster');
+    });
+
+    it('开启防重时，丢弃已存在的同名实体新增，并保留底表原样', () => {
+      const data = {
+        sheet_0: {
+          uid: 'sheet_0',
+          name: '重要角色表',
+          updateConfig: {},
+          exportConfig: {
+            dynamicWindowPreventDuplicateInsert: true,
+            keywords: '姓名',
+          },
+          sourceData: {},
+          orderNo: 0,
+          content: [
+            ['row_id', '姓名', '是否离场'],
+            ['1', '美狄亚,Caster', '否'],
+          ],
+        },
+      } as any;
+
+      const aiResponse = '<tableEdit>insertRow(0, {"0": "美狄亚,Caster", "1": "否"});</tableEdit>';
+      parseAndApplyTableEditsToData_ACU(aiResponse, data, 'standard');
+
+      // 应当丢弃新增，表格行数保持不变
+      expect(data.sheet_0.content.length).toBe(2);
+      expect(data.sheet_0.content[1][1]).toBe('美狄亚,Caster');
+    });
+
+    it('开启防重时，新实体（非重复）正常插入', () => {
+      const data = {
+        sheet_0: {
+          uid: 'sheet_0',
+          name: '重要角色表',
+          updateConfig: {},
+          exportConfig: {
+            dynamicWindowPreventDuplicateInsert: true,
+            keywords: '姓名',
+          },
+          sourceData: {},
+          orderNo: 0,
+          content: [
+            ['row_id', '姓名', '是否离场'],
+            ['1', '美狄亚,Caster', '否'],
+          ],
+        },
+      } as any;
+
+      const aiResponse = '<tableEdit>insertRow(0, {"0": "库丘林,Caster", "1": "否"});</tableEdit>';
+      parseAndApplyTableEditsToData_ACU(aiResponse, data, 'standard');
+
+      expect(data.sheet_0.content.length).toBe(3);
+      expect(data.sheet_0.content[2][1]).toBe('库丘林,Caster');
+    });
+  });
 });

@@ -355,6 +355,33 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
                         break;
                     }
                     if (table && table.content && typeof data === 'object') {
+                        // 唯一键防重拦截：仅当 exportConfig 显式开启 dynamicWindowPreventDuplicateInsert 时生效
+                        if (table.exportConfig?.dynamicWindowPreventDuplicateInsert === true) {
+                            const headers = Array.isArray(table.content[0]) ? table.content[0].slice(1) : [];
+                            let keyColIndex = 0;
+                            const keywordColName = String(table.exportConfig?.keywords || '').trim();
+                            if (keywordColName && headers.length > 0) {
+                                const colNames = keywordColName.split(/[,，]/).map((s: string) => s.trim()).filter(Boolean);
+                                const foundIdx = headers.findIndex((h: any) => colNames.includes(String(h || '').trim()));
+                                if (foundIdx !== -1) {
+                                    keyColIndex = foundIdx;
+                                }
+                            }
+                            const candidateValue = String(data[keyColIndex] ?? data[String(keyColIndex)] ?? '').trim();
+                            if (candidateValue) {
+                                const existingRows = table.content.slice(1);
+                                const isDuplicate = existingRows.some((row: any) => {
+                                    if (!Array.isArray(row)) return false;
+                                    const existingVal = String(row[keyColIndex + 1] ?? '').trim();
+                                    return existingVal === candidateValue;
+                                });
+                                if (isDuplicate) {
+                                    logWarn_ACU(`[防重拦截] 表格 "${table.name}" 唯一键 "${candidateValue}" 已存在于底表中，已安全丢弃本次 insertRow 操作。`);
+                                    break;
+                                }
+                            }
+                        }
+
                         const reservedRowIds = createStableRowIdReservation_ACU(table.content.slice(1));
                         const newRow: any[] = [allocateStableRowId_ACU(reservedRowIds)];
                         const headers = table.content[0].slice(1);

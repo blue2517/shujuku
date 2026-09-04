@@ -10,6 +10,7 @@ import type { SqlTableApplyScope_ACU } from '../../../shared/table-storage-provi
 import { getUserName_ACU } from '../../../data/gateways/host-state-gateway';
 import { attachSeedRowsToCurrentDataFromGuide_ACU, ensureChatSheetGuideSeeded_ACU, getEffectiveSeedRowsForSheet_ACU, getSortedSheetKeys_ACU, filterSheetKeysByTemplateScope_ACU, projectSheetForTemplateScope_ACU, resolveTemplateScope_ACU } from '../../template/chat-scope';
 import { getCombinedWorldbookContent_ACU } from '../../worldbook/pipeline';
+import { splitKeywordsByComma_ACU } from '../../worldbook/injection-engine-entries';
 import { isDatabaseGeneratedLorebookEntry_ACU, resolveGeneratedEntriesForTable_ACU, resolveUniqueTableExportIdentity_ACU } from '../../worldbook/worldbook-placeholder-classification';
 import { createLorebookReadContext_ACU, type LorebookReadContext_ACU } from '../../worldbook/read-context';
 import { buildTableCandidateScope_ACU, collectAsyncTableCandidateScope_ACU, resolveLorebookReadTargets_ACU } from '../../worldbook/read-scope';
@@ -32,17 +33,25 @@ import { projectFlightModeHiddenChronicleRows_ACU } from '../../flight-mode/flig
 
 const AUTHOR_SQL_TABLE_IDENTIFIER_ACU = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-interface PromptRowWindow_ACU {
+export interface PromptRowWindow_ACU {
     rowsToProcess: any[];
     startIndex: number;
     limitNote?: string;
+    rowIndices?: number[];
 }
 
-function resolvePromptRowWindow_ACU(
+export function resolvePromptRowWindow_ACU(
     table: any,
     effectiveAllRows: any[],
-    flightModeEnabled: boolean,
+    optionsOrFlightMode: boolean | { flightModeEnabled?: boolean; messages?: any[] } = false,
 ): PromptRowWindow_ACU {
+    const flightModeEnabled = typeof optionsOrFlightMode === 'boolean'
+        ? optionsOrFlightMode
+        : (optionsOrFlightMode?.flightModeEnabled === true);
+    const messages = (typeof optionsOrFlightMode === 'object' && Array.isArray(optionsOrFlightMode?.messages))
+        ? optionsOrFlightMode.messages
+        : [];
+
     const tableName = String(table?.name || '').trim();
     const isChronicleTable = tableName === '纪要表';
     const isFixedSummaryTable = isChronicleTable || tableName === '总结表';
@@ -58,6 +67,126 @@ function resolvePromptRowWindow_ACU(
     }
 
     if (!isFixedSummaryTable) {
+        const exportConfig = table?.exportConfig;
+        const isSplitKeywordExport = exportConfig?.enabled === true
+            && exportConfig?.splitByRow === true
+            && exportConfig?.entryType === 'keyword';
+        const isDynamicWindowActive = isSplitKeywordExport
+            && exportConfig?.dynamicWindowEnabled === true;
+
+        const threshold = typeof exportConfig?.dynamicWindowThreshold === 'number' && exportConfig.dynamicWindowThreshold >= 0
+            ? exportConfig.dynamicWindowThreshold
+            : 20;
+
+        if (isDynamicWindowActive && effectiveAllRows.length > threshold) {
+            const rawHeaders: string[] = Array.isArray(table?.content?.[0])
+                ? table.content[0].map((h: any) => String(h ?? '').trim())
+                : [];
+
+            // 1. 最新 n 回合对话文本提取
+            const roundCount = typeof exportConfig.dynamicWindowKeywordRounds === 'number' && exportConfig.dynamicWindowKeywordRounds > 0
+                ? exportConfig.dynamicWindowKeywordRounds
+                : 5;
+            const messageCountToScan = roundCount * 2;
+            const scanMessages = messages.slice(-messageCountToScan);
+            const scanText = scanMessages.map((m: any) => m?.mes || m?.message || '').join('\n');
+            const scanTextLower = scanText.toLowerCase();
+
+            // 2. 状态列配置
+            const filterColName = String(exportConfig.dynamicWindowFilterColumn || '').trim();
+            const filterVal = String(exportConfig.dynamicWindowFilterValue ?? '').trim();
+            let filterColIndex = -1;
+            if (filterColName && rawHeaders.length > 0) {
+                filterColIndex = rawHeaders.indexOf(filterColName);
+            }
+
+            // 3. 最新新增缓冲行
+            const latestRowsCount = typeof exportConfig.dynamicWindowLatestRows === 'number'
+                ? exportConfig.dynamicWindowLatestRows
+                : 2;
+            const bufferStartIndex = latestRowsCount > 0
+                ? Math.max(0, effectiveAllRows.length - latestRowsCount)
+                : effectiveAllRows.length;
+
+            // 4. 关键词召回列
+            const keywordColNames = exportConfig.keywords
+                ? splitKeywordsByComma_ACU(exportConfig.keywords)
+                : [];
+            const keywordColIndices: number[] = [];
+            const staticKeywords: string[] = [];
+            keywordColNames.forEach((name: string) => {
+                const idx = rawHeaders.indexOf(name);
+                if (idx !== -1) {
+                    keywordColIndices.push(idx);
+                } else {
+                    staticKeywords.push(name.toLowerCase());
+                }
+            });
+            if (keywordColIndices.length === 0 && staticKeywords.length === 0 && rawHeaders.length > 1) {
+                keywordColIndices.push(1);
+            }
+
+            const matchedIndices = new Set<number>();
+            effectiveAllRows.forEach((row: any, rowIndex: number) => {
+                if (!Array.isArray(row)) return;
+
+                // 条件 B: 最新新增缓冲
+                if (rowIndex >= bufferStartIndex) {
+                    matchedIndices.add(rowIndex);
+                    return;
+                }
+
+                // 条件 A: 状态列固定值匹配
+                if (filterColIndex !== -1 && filterVal !== '') {
+                    const cellVal = String(row[filterColIndex] ?? '').trim();
+                    if (cellVal === filterVal) {
+                        matchedIndices.add(rowIndex);
+                        return;
+                    }
+                }
+
+                // 条件 C: 关键词召回
+                if (scanTextLower) {
+                    let isKeywordMatched = false;
+                    for (const sk of staticKeywords) {
+                        if (sk && scanTextLower.includes(sk)) {
+                            isKeywordMatched = true;
+                            break;
+                        }
+                    }
+                    if (!isKeywordMatched) {
+                        for (const colIdx of keywordColIndices) {
+                            const cellText = String(row[colIdx] ?? '').trim();
+                            if (!cellText) continue;
+                            const keys = splitKeywordsByComma_ACU(cellText);
+                            for (const k of keys) {
+                                const lowerKey = k.toLowerCase();
+                                if (lowerKey && scanTextLower.includes(lowerKey)) {
+                                    isKeywordMatched = true;
+                                    break;
+                                }
+                            }
+                            if (isKeywordMatched) break;
+                        }
+                    }
+                    if (isKeywordMatched) {
+                        matchedIndices.add(rowIndex);
+                        return;
+                    }
+                }
+            });
+
+            const sortedIndices = Array.from(matchedIndices).sort((a, b) => a - b);
+            const rowsToProcess = sortedIndices.map(idx => effectiveAllRows[idx]);
+            const limitNote = `Dynamic row window active: Showing ${rowsToProcess.length} of ${effectiveAllRows.length} entries (threshold=${threshold}).`;
+            return {
+                rowsToProcess,
+                startIndex: 0,
+                limitNote,
+                rowIndices: sortedIndices,
+            };
+        }
+
         const sendLatestRows = typeof table?.updateConfig?.sendLatestRows === 'number'
             ? table.updateConfig.sendLatestRows
             : -1;
@@ -257,6 +386,7 @@ function resolvePromptRowWindow_ACU(
             tableDataText += formatTableForSqliteMode(table, tableIndex, sheetKey, _seedGuideDataForThisPrepare_ACU, {
                 allowSeedRowsFallback: false,
                 flightModeEnabled: flightMode.enabled,
+                messages,
                 ...(selectedPromptName as { authoredTableName?: string; runtimeTableName?: string }),
             });
             continue;
@@ -307,7 +437,10 @@ function resolvePromptRowWindow_ACU(
                 tableDataText += `  - SeedRows: 已提供模板基础数据（尚未写入聊天楼层数据；本次填表可直接基于这些行更新）\n`;
             }
 
-            const rowWindow = resolvePromptRowWindow_ACU(table, effectiveAllRows, flightMode.enabled);
+            const rowWindow = resolvePromptRowWindow_ACU(table, effectiveAllRows, {
+                flightModeEnabled: flightMode.enabled,
+                messages,
+            });
             const { rowsToProcess, startIndex } = rowWindow;
             if (rowWindow.limitNote) {
                 tableDataText += `  - Note: ${rowWindow.limitNote}\n`;
@@ -315,7 +448,7 @@ function resolvePromptRowWindow_ACU(
 
             if (rowsToProcess.length > 0) {
                 rowsToProcess.forEach((row: any, index: number) => {
-                    const originalRowIndex = startIndex + index;
+                    const originalRowIndex = rowWindow.rowIndices ? rowWindow.rowIndices[index] : (startIndex + index);
                     const rowData = visibleColumns.map(column => Array.isArray(row) ? row[column.sourceIndex] : null).join(', ');
                     tableDataText += `  [${originalRowIndex}] ${rowData}\n`;
                 });
@@ -589,7 +722,7 @@ export function formatTableForSqliteMode(
     tableIndex: number,
     sheetKey: string,
     guideData: any,
-    options: { allowSeedRowsFallback?: boolean; runtimeTableName?: string; authoredTableName?: string; flightModeEnabled?: boolean } = {},
+    options: { allowSeedRowsFallback?: boolean; runtimeTableName?: string; authoredTableName?: string; flightModeEnabled?: boolean; messages?: any[] } = {},
 ): string {
     let text = '';
     const projection = getSheetColumnProjection_ACU(table);
@@ -713,7 +846,10 @@ export function formatTableForSqliteMode(
 
 
     // 行数限制逻辑（与原生模式一致）
-    const rowWindow = resolvePromptRowWindow_ACU(table, effectiveAllRows, options.flightModeEnabled === true);
+    const rowWindow = resolvePromptRowWindow_ACU(table, effectiveAllRows, {
+        flightModeEnabled: options.flightModeEnabled === true,
+        messages: options.messages,
+    });
     const { rowsToProcess, startIndex } = rowWindow;
     if (rowWindow.limitNote) {
         text += `-- Note: ${rowWindow.limitNote}\n`;
