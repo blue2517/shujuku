@@ -11,6 +11,7 @@ node_modules/
 
 # 构建产物
 dist/
+index.js
 
 # 本地 SillyTavern 参考源码
 SillyTavern-1.13.1/
