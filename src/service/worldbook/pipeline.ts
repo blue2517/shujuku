@@ -16,6 +16,8 @@ import { normalizeCanonicalTableRows_ACU, repairLegacyAutoMergedRowTails_ACU } f
 import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
 import { persistNullRowCleanupShards_ACU, type NullRowCleanupPersistStatus_ACU } from '../table/storage-frame-v2-persist';
 import { allocConsecutiveOrderBlock_ACU, applyPlacementToEntry_ACU, buildDefaultGlobalInjectionConfig_ACU, buildUsedOrderSet_ACU, ensureExportConfigDefaults_ACU, ensureGlobalInjectionConfigDefaults_ACU, getEntryOrderNumber_ACU, getFixedPlacementDefaultsForTable_ACU, getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU, isEntryPlacementMatched_ACU, normalizeLorebookPosition_ACU, normalizePlacementConfig_ACU, updateCustomTableExports_ACU, updateImportantPersonsRelatedEntries_ACU, updateOutlineTableEntry_ACU, updateSummaryTableEntries_ACU } from './injection-engine';
+import { substituteWorldbookMacros_ACU, substituteWorldbookMacrosAsync_ACU } from './macro-resolver';
+export { substituteWorldbookMacros_ACU, substituteWorldbookMacrosAsync_ACU } from './macro-resolver';
 // pipeline.ts
 // 从 05_core_tail.js 迁入
 
@@ -1104,6 +1106,144 @@ export   function getWorldbookEntryKeywords_ACU(entry: Record<string, any>) {
   }
 
 
+export type WorldbookSelectiveLogic_ACU = 'and_any' | 'not_all' | 'not_any' | 'and_all';
+
+export function normalizeWorldbookRawKeyList_ACU(input: unknown): string[] {
+    const results: string[] = [];
+    const add = (val: unknown) => {
+        if (typeof val === 'string') {
+            const trimmed = val.trim();
+            if (!trimmed) return;
+            if (/^\/.+\/[a-z]*$/i.test(trimmed)) {
+                results.push(trimmed);
+            } else {
+                trimmed.split(/[,，]/).forEach(item => {
+                    const itemTrimmed = item.trim();
+                    if (itemTrimmed) results.push(itemTrimmed);
+                });
+            }
+        } else if (Array.isArray(val)) {
+            val.forEach(add);
+        }
+    };
+    add(input);
+    return [...new Set(results)];
+}
+
+export function getWorldbookPrimaryKeys_ACU(entry: Record<string, any>): string[] {
+    const fromKeys = normalizeWorldbookRawKeyList_ACU(entry?.keys);
+    const fromKey = normalizeWorldbookRawKeyList_ACU(entry?.key);
+    return [...new Set([...fromKeys, ...fromKey])];
+}
+
+export function getWorldbookSecondaryKeys_ACU(entry: Record<string, any>): string[] {
+    const fromSecondary = normalizeWorldbookRawKeyList_ACU(entry?.keysecondary);
+    const fromFilters = normalizeWorldbookRawKeyList_ACU(entry?.filters);
+    const fromSecondaryKeys = normalizeWorldbookRawKeyList_ACU(entry?.secondary_keys);
+    return [...new Set([...fromSecondary, ...fromFilters, ...fromSecondaryKeys])];
+}
+
+export function getWorldbookLogic_ACU(entry: Record<string, any>): WorldbookSelectiveLogic_ACU {
+    const rawLogic = entry?.selectiveLogic !== undefined ? entry.selectiveLogic : entry?.logic;
+    if (typeof rawLogic === 'number') {
+        switch (rawLogic) {
+            case 0: return 'and_any';
+            case 1: return 'not_all';
+            case 2: return 'not_any';
+            case 3: return 'and_all';
+            default: return 'and_any';
+        }
+    }
+    const strLogic = String(rawLogic || '').trim().toLowerCase().replace(/[-_ ]/g, '');
+    if (strLogic === 'andall' || strLogic === 'all' || strLogic === '与所有') return 'and_all';
+    if (strLogic === 'notany' || strLogic === 'none' || strLogic === '非任何') return 'not_any';
+    if (strLogic === 'notall' || strLogic === '非所有') return 'not_all';
+    if (strLogic === 'andany' || strLogic === 'any' || strLogic === '与任意') return 'and_any';
+    return 'and_any';
+}
+
+export function matchSingleWorldbookKey_ACU(
+    rawKey: string,
+    text: string,
+    options: { matchWholeWords?: boolean } = {},
+): boolean {
+    const trimmed = String(rawKey || '').trim();
+    if (!trimmed || !text) return false;
+
+    // 支持正则表达式语法 /pattern/flags（默认忽略大小写）
+    const regexMatch = trimmed.match(/^\/(.+)\/([a-z]*)$/i);
+    if (regexMatch) {
+        try {
+            let flags = regexMatch[2] || '';
+            if (!flags.includes('i')) flags += 'i';
+            const regex = new RegExp(regexMatch[1], flags);
+            return regex.test(text);
+        } catch {
+            return false;
+        }
+    }
+
+    // 整词匹配支持：条目开启 match_whole_words 时，对英文/数字关键词使用单词边界保护
+    if (options.matchWholeWords === true) {
+        try {
+            const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(`(?:^|\\b)${escaped}(?:\\b|$)`, 'i');
+            if (regex.test(text)) return true;
+            // 中文等非 ASCII 字符无英文单词边界，平滑回退包含匹配
+            if (/[^\x00-\x7F]/.test(trimmed)) {
+                return text.toLowerCase().includes(trimmed.toLowerCase());
+            }
+            return false;
+        } catch {
+            return text.toLowerCase().includes(trimmed.toLowerCase());
+        }
+    }
+
+    // 普通文本一律保持统一小写匹配，不区分大小写
+    return text.toLowerCase().includes(trimmed.toLowerCase());
+}
+
+export function evaluateWorldbookEntryTrigger_ACU(
+    entry: Record<string, any>,
+    scanText: string,
+): boolean {
+    if (!entry || typeof entry !== 'object' || !scanText) return false;
+
+    const matchOptions = {
+        matchWholeWords: entry.match_whole_words === true,
+    };
+
+    const primaryKeys = getWorldbookPrimaryKeys_ACU(entry);
+    if (primaryKeys.length === 0) return false;
+
+    const primaryMatched = primaryKeys.some(key => matchSingleWorldbookKey_ACU(key, scanText, matchOptions));
+    if (!primaryMatched) return false;
+
+    const secondaryKeys = getWorldbookSecondaryKeys_ACU(entry);
+    if (secondaryKeys.length === 0) {
+        // 无次要过滤器时，主关键字命中即触发
+        return true;
+    }
+
+    const logic = getWorldbookLogic_ACU(entry);
+    const totalCount = secondaryKeys.length;
+    const matchedCount = secondaryKeys.filter(key => matchSingleWorldbookKey_ACU(key, scanText, matchOptions)).length;
+
+    switch (logic) {
+        case 'and_all': // 与所有
+            return matchedCount === totalCount;
+        case 'not_any': // 非任何
+            return matchedCount === 0;
+        case 'and_any': // 与任意
+            return matchedCount > 0;
+        case 'not_all': // 非所有
+            return matchedCount < totalCount;
+        default:
+            return matchedCount > 0;
+    }
+}
+
+
 export   function getWorldbookEntryPlaceholderSortKey_ACU(entry: Record<string, any>) {
       const position = normalizeLorebookPosition_ACU(entry?.position, 'at_depth_as_system');
       const order = getEntryOrderNumber_ACU(entry);
@@ -1298,7 +1438,7 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
       if (includeConstantEntriesInBaseScan) {
           const constantBaseText = constantEntries
               .filter(entry => !entry.prevent_recursion)
-              .map(entry => entry.content || '')
+              .map(entry => substituteWorldbookMacros_ACU(entry.content || ''))
               .join('\n')
               .toLowerCase();
           if (constantBaseText) {
@@ -1316,17 +1456,15 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
 
           const recursionSourceContent = Array.from(triggeredEntries)
               .filter(entry => !entry.prevent_recursion)
-              .map(entry => entry.content)
+              .map(entry => substituteWorldbookMacros_ACU(entry.content || ''))
               .join('\n')
               .toLowerCase();
           const fullSearchText = `${baseScanText}\n${recursionSourceContent}`;
 
           const remainingKeywordEntries = [];
           for (const entry of keywordEntries) {
-              const keywords = getWorldbookEntryKeywords_ACU(entry);
-              const isTriggered = keywords.length > 0 && keywords.some(keyword =>
-                  entry.exclude_recursion ? baseScanText.includes(keyword) : fullSearchText.includes(keyword)
-              );
+              const searchText = entry.exclude_recursion ? baseScanText : fullSearchText;
+              const isTriggered = evaluateWorldbookEntryTrigger_ACU(entry, searchText);
 
               if (isTriggered) {
                   triggeredEntries.add(entry);
@@ -1362,7 +1500,10 @@ export   function formatCombinedWorldbookEntries_ACU(entries: any[], formatEntry
           ? formatEntry
           : ((entry: any) => `# ${entry.comment || `Entry from ${entry.bookName}`}\n${entry.content}`);
       return (Array.isArray(entries) ? entries : [])
-          .map(entry => effectiveFormatEntry(entry))
+          .map(entry => {
+              const formatted = effectiveFormatEntry(entry);
+              return substituteWorldbookMacros_ACU(typeof formatted === 'string' ? formatted : String(entry?.content || ''));
+          })
           .filter(chunk => typeof chunk === 'string' && chunk.trim())
           .join('\n\n')
           .trim();
@@ -1372,7 +1513,11 @@ export   function formatCombinedWorldbookEntries_ACU(entries: any[], formatEntry
 export   async function buildCombinedWorldbookContentByStrategy_ACU(options: any = {}) {
       const logPrefix = String(options?.logPrefix || '[Worldbook]');
       const finalEntries = await collectCombinedWorldbookEntriesByStrategy_ACU(options);
-      const combinedContent = formatCombinedWorldbookEntries_ACU(finalEntries, options?.formatEntry);
+      let combinedContent = formatCombinedWorldbookEntries_ACU(finalEntries, options?.formatEntry);
+
+      if (combinedContent && combinedContent.includes('{{')) {
+          combinedContent = await substituteWorldbookMacrosAsync_ACU(combinedContent);
+      }
 
       if (!combinedContent) {
           logDebug_ACU(`${logPrefix} No worldbook entries were ultimately triggered.`);
@@ -1425,7 +1570,7 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
             bookNames,
             entriesByBook: options?.entriesByBook,
             readContext: options?.readContext,
-            formatEntry: (entry: any) => String(entry?.content || '').trim(),
+            formatEntry: (entry: any) => substituteWorldbookMacros_ACU(String(entry?.content || '')).trim(),
             baseScanText: (typeof initialScanTextOverride === 'string' && initialScanTextOverride.trim()) ? initialScanTextOverride : '',
             fallbackScanText: allChatMessages_ACU.map(message => message.message).join('\n'),
             entryStateView,

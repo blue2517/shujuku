@@ -245,6 +245,12 @@ import {
   isImportTaggedLorebookEntry_ACU,
   getWorldbookCommentInfo_ACU,
   getWorldbookEntryKeywords_ACU,
+  normalizeWorldbookRawKeyList_ACU,
+  getWorldbookPrimaryKeys_ACU,
+  getWorldbookSecondaryKeys_ACU,
+  getWorldbookLogic_ACU,
+  matchSingleWorldbookKey_ACU,
+  evaluateWorldbookEntryTrigger_ACU,
   getWorldbookEntryPlaceholderSortKey_ACU,
   compareWorldbookEntriesForPlaceholder_ACU,
   createStrictLorebookReadError_ACU,
@@ -373,6 +379,198 @@ describe('getWorldbookEntryKeywords_ACU', () => {
   it('过滤空字符串和空白', () => {
     const result = getWorldbookEntryKeywords_ACU({ key: ['valid', '', '  '] });
     expect(result).toEqual(['valid']);
+  });
+});
+
+describe('normalizeWorldbookRawKeyList_ACU', () => {
+  it('正确解析英文逗号与中文逗号分割的关键字并去重', () => {
+    expect(normalizeWorldbookRawKeyList_ACU('肉棒，精液，阴茎, 小穴')).toEqual(['肉棒', '精液', '阴茎', '小穴']);
+  });
+
+  it('保留完整的正则表达式字面量而不按逗号截断', () => {
+    expect(normalizeWorldbookRawKeyList_ACU('/(198[5-9]|199[0-9])年/')).toEqual(['/(198[5-9]|199[0-9])年/']);
+  });
+
+  it('支持数组格式输入', () => {
+    expect(normalizeWorldbookRawKeyList_ACU(['远坂凛, 凛', 'Saber'])).toEqual(['远坂凛', '凛', 'Saber']);
+  });
+
+  it('空值或空数组安全返回空数组', () => {
+    expect(normalizeWorldbookRawKeyList_ACU(null)).toEqual([]);
+    expect(normalizeWorldbookRawKeyList_ACU(undefined)).toEqual([]);
+    expect(normalizeWorldbookRawKeyList_ACU('')).toEqual([]);
+  });
+});
+
+describe('getWorldbookLogic_ACU', () => {
+  it('支持数字与英文字符串 logic', () => {
+    expect(getWorldbookLogic_ACU({ logic: 0 })).toBe('and_any');
+    expect(getWorldbookLogic_ACU({ logic: 1 })).toBe('not_all');
+    expect(getWorldbookLogic_ACU({ logic: 2 })).toBe('not_any');
+    expect(getWorldbookLogic_ACU({ logic: 3 })).toBe('and_all');
+    expect(getWorldbookLogic_ACU({ selectiveLogic: 3 })).toBe('and_all');
+    expect(getWorldbookLogic_ACU({ logic: 'and_all' })).toBe('and_all');
+    expect(getWorldbookLogic_ACU({ logic: 'not_any' })).toBe('not_any');
+  });
+
+  it('支持中文字符串 logic', () => {
+    expect(getWorldbookLogic_ACU({ logic: '与所有' })).toBe('and_all');
+    expect(getWorldbookLogic_ACU({ logic: '非任何' })).toBe('not_any');
+    expect(getWorldbookLogic_ACU({ logic: '与任意' })).toBe('and_any');
+    expect(getWorldbookLogic_ACU({ logic: '非所有' })).toBe('not_all');
+  });
+
+  it('缺省时安全退化为 and_any', () => {
+    expect(getWorldbookLogic_ACU({})).toBe('and_any');
+  });
+});
+
+describe('matchSingleWorldbookKey_ACU', () => {
+  it('正则表达式忽略大小写匹配', () => {
+    expect(matchSingleWorldbookKey_ACU('/(198[5-9]|199[0-9])年/', '那是1994年冬木市')).toBe(true);
+    expect(matchSingleWorldbookKey_ACU('/(198[5-9]|199[0-9])年/', '当前是2004年冬木市')).toBe(false);
+  });
+
+  it('普通文本忽略大小写匹配', () => {
+    expect(matchSingleWorldbookKey_ACU('Saber', 'saber is here')).toBe(true);
+    expect(matchSingleWorldbookKey_ACU('远坂凛', '远坂凛正在释放宝石魔术')).toBe(true);
+  });
+
+  it('整词匹配：英文单词边界保护防止子串误伤', () => {
+    // 开启 matchWholeWords 时，cat 不匹配 category
+    expect(matchSingleWorldbookKey_ACU('cat', 'the category of items', { matchWholeWords: true })).toBe(false);
+    expect(matchSingleWorldbookKey_ACU('cat', 'a black cat jumped', { matchWholeWords: true })).toBe(true);
+    // 中文平滑兼容
+    expect(matchSingleWorldbookKey_ACU('远坂凛', '远坂凛走来', { matchWholeWords: true })).toBe(true);
+  });
+});
+
+describe('evaluateWorldbookEntryTrigger_ACU 场景覆盖', () => {
+  it('场景1：远坂凛(fz) 使用[与所有] + 正则年份过滤器，未满足年份时坚决阻断', () => {
+    const fzEntry = {
+      keys: ['远坂凛', '凛'],
+      filters: ['/(198[5-9]|199[0-9])年/'],
+      logic: '与所有', // and_all
+    };
+
+    // FSN 2004年剧情：正文出现“凛”，但未出现 1985-1999 年份
+    expect(evaluateWorldbookEntryTrigger_ACU(fzEntry, '卫宫士郎看着身边的远坂凛，心中感慨万千。')).toBe(false);
+
+    // 满足年份时，正常触发
+    expect(evaluateWorldbookEntryTrigger_ACU(fzEntry, '回到1994年第四次圣杯战争，幼年凛看着父亲远坂时臣。')).toBe(true);
+  });
+
+  it('场景2：体位世界书 使用[非任何] + 结束过滤器，出现拦截词时坚决阻断', () => {
+    const sexEntry = {
+      keys: ['肉棒', '精液', '阴茎', '抽插'],
+      filters: ['性爱结束'],
+      logic: '非任何', // not_any
+    };
+
+    // 正常命中主键且无拦截词：触发
+    expect(evaluateWorldbookEntryTrigger_ACU(sexEntry, '滚烫的肉棒有力地抽插着。')).toBe(true);
+
+    // 出现拦截词“性爱结束”：坚决拦截阻断
+    expect(evaluateWorldbookEntryTrigger_ACU(sexEntry, '在一番激烈的抽插后，这场性爱结束了，两人沉沉睡去。')).toBe(false);
+  });
+
+  it('场景3：[与任意] 命中任一可选过滤器即触发', () => {
+    const entry = {
+      keys: ['战斗'],
+      filters: ['宝具', '令咒'],
+      logic: '与任意', // and_any
+    };
+
+    expect(evaluateWorldbookEntryTrigger_ACU(entry, '一场激烈的战斗展开')).toBe(false);
+    expect(evaluateWorldbookEntryTrigger_ACU(entry, '战斗中消耗了一划令咒')).toBe(true);
+    expect(evaluateWorldbookEntryTrigger_ACU(entry, '战斗中解放了对城宝具')).toBe(true);
+  });
+
+  it('场景4：[非所有] 当所有过滤器全部满足时阻断，未全满时触发', () => {
+    const entry = {
+      keys: ['任务'],
+      filters: ['已完成', '已交付'],
+      logic: '非所有', // not_all
+    };
+
+    // 满足主键，过滤器未全满 -> 触发
+    expect(evaluateWorldbookEntryTrigger_ACU(entry, '任务状态更新')).toBe(true);
+    expect(evaluateWorldbookEntryTrigger_ACU(entry, '任务已完成，等待确认')).toBe(true);
+
+    // 满足主键，过滤器全部达成 -> 阻断
+    expect(evaluateWorldbookEntryTrigger_ACU(entry, '该任务已完成且已交付报酬')).toBe(false);
+  });
+
+  it('无过滤器时主键命中直接触发', () => {
+    const entry = { keys: ['卫宫士郎'] };
+    expect(evaluateWorldbookEntryTrigger_ACU(entry, '卫宫士郎正在投影魔术')).toBe(true);
+    expect(evaluateWorldbookEntryTrigger_ACU(entry, '间桐樱在准备晚餐')).toBe(false);
+  });
+});
+
+describe('collectCombinedWorldbookEntriesByStrategy_ACU 逻辑门控与递归集成', () => {
+  it('正确集成逻辑门控，未满足与所有条件的条目不被收集', async () => {
+    mockGwGetLorebookEntries.mockResolvedValue([
+      {
+        uid: 1,
+        comment: '角色:远坂凛(fz)',
+        content: '7岁幼年凛人设',
+        enabled: true,
+        type: 'selective',
+        keys: ['远坂凛', '凛'],
+        filters: ['/(198[5-9]|199[0-9])年/'],
+        logic: 'and_all',
+      },
+      {
+        uid: 2,
+        comment: '角色:远坂凛(fsn)',
+        content: '高校生凛人设',
+        enabled: true,
+        type: 'selective',
+        keys: ['远坂凛', '凛'],
+      },
+    ]);
+
+    const result = await collectCombinedWorldbookEntriesByStrategy_ACU({
+      bookNames: ['FateStayNight'],
+      baseScanText: '卫宫士郎在走廊遇到了远坂凛。',
+    });
+
+    // 幼年凛因为年份条件不满足被剔除，只有高校生凛被收集！
+    expect(result).toHaveLength(1);
+    expect(result[0].comment).toBe('角色:远坂凛(fsn)');
+  });
+
+  it('正确支持 exclude_recursion：不可递归条目不被其他条目正文激活', async () => {
+    mockGwGetLorebookEntries.mockResolvedValue([
+      {
+        uid: 10,
+        comment: '角色:阿尔托莉雅',
+        content: '她是亚瑟王，手持誓约胜利之剑。',
+        enabled: true,
+        type: 'selective',
+        keys: ['阿尔托莉雅'],
+      },
+      {
+        uid: 11,
+        comment: '宝具:誓约胜利之剑',
+        content: '对城宝具Excalibur。',
+        enabled: true,
+        type: 'selective',
+        keys: ['誓约胜利之剑'],
+        exclude_recursion: true, // 不可递归！只能由基础正文激活
+      },
+    ]);
+
+    // 基础正文只提到了“阿尔托莉雅”，没有提到“誓约胜利之剑”
+    const result = await collectCombinedWorldbookEntriesByStrategy_ACU({
+      bookNames: ['FateStayNight'],
+      baseScanText: '阿尔托莉雅站在庭院中。',
+    });
+
+    // 阿尔托莉雅被触发，其内容提到了“誓约胜利之剑”，但因为宝具条目开启了 exclude_recursion，坚决不被递归激活！
+    expect(result).toHaveLength(1);
+    expect(result[0].comment).toBe('角色:阿尔托莉雅');
   });
 });
 
@@ -2144,4 +2342,90 @@ describe('getCombinedWorldbookContent_ACU', () => {
     const result = await getCombinedWorldbookContent_ACU();
     expect(result).toBe('');
   });
+
+  it('正确解析世界书条目中的 {{webSearchResults}} 等酒馆宏并输出真实内容', async () => {
+    const originalWindow = (globalThis as any).window;
+    try {
+      (globalThis as any).window = {
+        SillyTavern: {
+          getContext: () => ({
+            substituteParamsExtended: (text: string) => {
+              return text.replace('{{webSearchResults}}', '【网络检索：2004年冬木市圣杯战争参战从者】');
+            },
+          }),
+        },
+      };
+
+      mockGetCurrentWorldbookConfig.mockReturnValue({
+        source: 'manual',
+        manualSelection: ['同人材料书'],
+        enabledEntries: {},
+      });
+
+      mockGwGetLorebookEntries.mockResolvedValue([
+        {
+          uid: 101,
+          comment: '同人材料',
+          content: '<原著补充材料>\n{{webSearchResults}}',
+          enabled: true,
+          type: 'constant',
+          key: [],
+          keys: [],
+        },
+      ]);
+
+      const result = await getCombinedWorldbookContent_ACU();
+      expect(result).toContain('【网络检索：2004年冬木市圣杯战争参战从者】');
+      expect(result).not.toContain('{{webSearchResults}}');
+    } finally {
+      (globalThis as any).window = originalWindow;
+    }
+  });
+
+  it('世界书递归扫描池能对常量条目中的宏进行展开，连锁触发下游条目', async () => {
+    const originalWindow = (globalThis as any).window;
+    try {
+      (globalThis as any).window = {
+        TavernHelper: {
+          substitudeMacros: (text: string) => {
+            return text.replace('{{char}}', '英灵卫宫');
+          },
+        },
+      };
+
+      mockGetCurrentWorldbookConfig.mockReturnValue({
+        source: 'manual',
+        manualSelection: ['递归设定书'],
+        enabledEntries: {},
+      });
+
+      mockGwGetLorebookEntries.mockResolvedValue([
+        {
+          uid: 201,
+          comment: '主角设定',
+          content: '当前出阵角色：{{char}}',
+          enabled: true,
+          type: 'constant',
+          key: [],
+          keys: [],
+        },
+        {
+          uid: 202,
+          comment: '无限剑制',
+          content: '无限剑制是英灵卫宫的固有结界。',
+          enabled: true,
+          type: 'keyword',
+          key: ['英灵卫宫'],
+          keys: [],
+        },
+      ]);
+
+      const result = await getCombinedWorldbookContent_ACU('无相关正文');
+      expect(result).toContain('当前出阵角色：英灵卫宫');
+      expect(result).toContain('无限剑制是英灵卫宫的固有结界。');
+    } finally {
+      (globalThis as any).window = originalWindow;
+    }
+  });
 });
+

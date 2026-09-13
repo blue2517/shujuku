@@ -110,6 +110,37 @@ describe('applyExcludeRulesToText_ACU', () => {
     });
     expect(result).toBe('前缀后缀');
   });
+  it('同一规则匹配多次时全部移除', () => {
+    const text = '前缀<thinking>思想1</thinking>正文1<thinking>思想2</thinking>正文2<thinking>思想3</thinking>后缀';
+    const result = applyExcludeRulesToText_ACU(text, {
+      excludeRules: [{ start: '<thinking>', end: '</thinking>' }],
+    });
+    expect(result).not.toContain('思想1');
+    expect(result).not.toContain('思想2');
+    expect(result).not.toContain('思想3');
+    expect(result).not.toContain('<thinking>');
+    expect(result).not.toContain('</thinking>');
+    expect(result).toBe('前缀正文1正文2后缀');
+  });
+  it('多条规则各出现多次时全部彻底移除', () => {
+    const text = '<draft_notes>草稿A</draft_notes>段落1<thinking>思考A</thinking>段落2<draft_notes>草稿B</draft_notes>段落3<thinking>思考B</thinking>';
+    const result = applyExcludeRulesToText_ACU(text, {
+      excludeRules: [
+        { start: '<draft_notes>', end: '</draft_notes>' },
+        { start: '<thinking>', end: '</thinking>' },
+      ],
+    });
+    expect(result).not.toContain('草稿');
+    expect(result).not.toContain('思考');
+    expect(result).toBe('段落1段落2段落3');
+  });
+  it('未闭合的标签不会清空全部正文', () => {
+    const text = '前文<thinking>未闭合的思维链...';
+    const result = applyExcludeRulesToText_ACU(text, {
+      excludeRules: [{ start: '<thinking>', end: '</thinking>' }],
+    });
+    expect(result).toBe('前文<thinking>未闭合的思维链...');
+  });
 });
 
 describe('applyContextTagFilters_ACU', () => {

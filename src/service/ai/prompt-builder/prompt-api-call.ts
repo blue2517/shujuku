@@ -122,14 +122,14 @@ export class RetryableAiResponseError_ACU extends Error {
 
     for (const segment of promptSegments) {
         let finalContent = segment.content;
-        finalContent = finalContent.replace('$0', filterTableInjectedContent(dynamicContent.tableDataText, '$0'));
-        finalContent = finalContent.replace('$1', filterTableInjectedContent(dynamicContent.messagesText, '$1'));
-        finalContent = finalContent.replace('$4', filterTableInjectedContent(dynamicContent.worldbookContent, '$4'));
-        finalContent = finalContent.replace(/\$6/g, filterTableInjectedContent(lastPlotContent || '', '$6'));
-        finalContent = finalContent.replace('$8', filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'));
-        finalContent = finalContent.replace(/\$9/g, filterTableInjectedContent(dynamicContent.worldbookDatabaseExcludedContent || '', '$9'));
-        finalContent = finalContent.replace(/\$U/g, filterTableInjectedContent(userInfoContent_Table, '$U'));
-        finalContent = finalContent.replace(/\$C/g, filterTableInjectedContent(charInfoContent_Table, '$C'));
+        finalContent = finalContent.replace(/\$0/g, () => filterTableInjectedContent(dynamicContent.tableDataText, '$0'));
+        finalContent = finalContent.replace(/\$1/g, () => filterTableInjectedContent(dynamicContent.messagesText, '$1'));
+        finalContent = finalContent.replace(/\$4/g, () => filterTableInjectedContent(dynamicContent.worldbookContent, '$4'));
+        finalContent = finalContent.replace(/\$6/g, () => filterTableInjectedContent(lastPlotContent || '', '$6'));
+        finalContent = finalContent.replace(/\$8/g, () => filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'));
+        finalContent = finalContent.replace(/\$9/g, () => filterTableInjectedContent(dynamicContent.worldbookDatabaseExcludedContent || '', '$9'));
+        finalContent = finalContent.replace(/\$U/g, () => filterTableInjectedContent(userInfoContent_Table, '$U'));
+        finalContent = finalContent.replace(/\$C/g, () => filterTableInjectedContent(charInfoContent_Table, '$C'));
 
         if (typeof dynamicContent?.resolveTableWorldbookContent === 'function') {
           const tableTokens: Array<{ raw: string; tableName: string }> = [];

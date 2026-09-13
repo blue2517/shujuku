@@ -23,6 +23,7 @@ export interface ApiPresetApiConfig_ACU {
   max_tokens: number;
   maxTokens?: number; // [兼容] 历史字段别名，防止旧调用方 maxTokens 访问崩溃
   temperature: number;
+  reasoning_effort?: string;
   bodyParams: string;
   excludeBodyParams: string;
   requestHeaders: string;
@@ -63,6 +64,10 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
   const temperature = Number(source.temperature ?? 1);
   const rawPostProc = String(source.postProcessing ?? source.custom_prompt_post_processing ?? 'none').trim().toLowerCase();
   const postProcessing = ['none', 'strict', 'default'].includes(rawPostProc) ? rawPostProc : 'none';
+  const rawReasoning = typeof source.reasoning_effort === 'string' ? source.reasoning_effort.trim().toLowerCase() : '';
+  const reasoning_effort = ['default', 'none', 'auto', 'min', 'low', 'medium', 'high', 'max'].includes(rawReasoning)
+    ? rawReasoning
+    : (rawReasoning || 'default');
   // [修复] 保留源对象中所有非白名单字段（如 topP/top_p/frequency_penalty），
   // 避免对运行中 apiConfig 的归一化破坏调用方依赖的透传字段。
   return {
@@ -73,13 +78,14 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
     max_tokens: Number.isFinite(maxTokens) && maxTokens >= 0 ? Math.floor(maxTokens) : 60000,
     maxTokens: Number.isFinite(maxTokens) && maxTokens >= 0 ? Math.floor(maxTokens) : 60000,
     temperature: Number.isFinite(temperature) ? temperature : 1,
+    reasoning_effort,
     bodyParams: typeof source.bodyParams === 'string' ? source.bodyParams : '',
     excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
     requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
     postProcessing,
     ...Object.fromEntries(
       Object.entries(source).filter(([key]) =>
-        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'postProcessing'].includes(key)
+        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'reasoning_effort', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'postProcessing'].includes(key)
       )
     ),
   };

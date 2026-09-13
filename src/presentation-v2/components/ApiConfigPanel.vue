@@ -145,6 +145,16 @@
             @update:model-value="activeDraft.postProcessing = $event"
           />
         </AcuFormRow>
+        <AcuFormRow
+          label="思考强度"
+          hint="用于支持思考/内置思维链的模型（如 Gemini 2.5/3.7、o1/o3、DeepSeek-R1 等）。若模型不支持请选'不指定'。"
+        >
+          <AcuSelect
+            :options="reasoningEffortOptions"
+            :model-value="activeDraft.reasoning_effort || 'default'"
+            @update:model-value="activeDraft.reasoning_effort = $event"
+          />
+        </AcuFormRow>
         <AcuFormRow label="附加主体参数" hint="SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。">
           <AcuTextarea
             v-model="activeDraft.bodyParams"
@@ -254,6 +264,15 @@ const postProcessingOptions: AcuSelectOption[] = [
   { value: "none", label: "原样透传 (none) — 推荐，保留多段系统提示词" },
   { value: "strict", label: "严格兼容 (strict) — 仅首段系统词，中间降级为用户词并合并" },
   { value: "default", label: "酒馆默认 (default) — 遵循酒馆内置规则" },
+];
+const reasoningEffortOptions: AcuSelectOption[] = [
+  { value: "default", label: "不指定 / 默认 (不发送该字段)" },
+  { value: "low", label: "低 (low)" },
+  { value: "medium", label: "中 (medium)" },
+  { value: "high", label: "高 (high)" },
+  { value: "max", label: "最大 (max)" },
+  { value: "min", label: "最小 (min)" },
+  { value: "auto", label: "自动 (auto)" },
 ];
 const modelSelectOptions = computed<AcuSelectOption[]>(() =>
   store.modelOptions.map((m) => ({ value: m, label: m })),

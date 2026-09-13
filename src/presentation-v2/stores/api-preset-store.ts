@@ -76,6 +76,7 @@ function findPresetMatchingCurrentConfig(presets: AcuV2ApiPreset[]): AcuV2ApiPre
       preset.apiConfig.model === current.apiConfig.model &&
       preset.apiConfig.max_tokens === current.apiConfig.max_tokens &&
       preset.apiConfig.temperature === current.apiConfig.temperature &&
+      (preset.apiConfig.reasoning_effort || 'default') === (current.apiConfig.reasoning_effort || 'default') &&
       preset.apiConfig.bodyParams === current.apiConfig.bodyParams &&
       preset.apiConfig.excludeBodyParams === current.apiConfig.excludeBodyParams &&
       preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders

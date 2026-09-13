@@ -1,0 +1,396 @@
+{
+  "mate": {
+    "type": "chatSheets",
+    "version": 2,
+    "globalInjectionConfig": {
+      "readableEntryPlacement": {
+        "position": "before_character_definition",
+        "depth": 2,
+        "order": 99981
+      },
+      "wrapperPlacement": {
+        "position": "before_character_definition",
+        "depth": 2,
+        "order": 99980
+      }
+    },
+    "updateConfigUiSentinel": -1
+  },
+  "sheet_zhu_jue_xin_xi": {
+    "uid": "sheet_zhu_jue_xin_xi",
+    "name": "主角信息",
+    "sourceData": {
+      "note": "记录主角的核心身份信息。此表有且仅有一行。\n- name (人物名称) - 主角的名字。\n- gender_age (性别/年龄) - 主角的生理性别和年龄。\n- appearance (外貌特征) - 对主角外貌的客观文字描写。\n- occupation (职业/身份) - 主角在社会中的主要角色。\n- experience (过往经历) - 记录主角的背景故事和后续的关键经历，随剧情增量更新，不超过300字，超过时需压缩。\n- personality (性格特点) - 对主角核心性格的概括。",
+      "initNode": "游戏初始化时，插入主角的唯一条目。",
+      "deleteNode": "禁止删除。",
+      "updateNode": "‘过往经历’列会根据剧情发展持续增量更新，当主角各项状态发生改变时更新。",
+      "insertNode": "禁止操作。",
+      "ddl": "CREATE TABLE protagonist_info (\n  row_id INTEGER PRIMARY KEY,\n  name TEXT, -- 人物名称\n  gender_age TEXT, -- 性别/年龄\n  appearance TEXT, -- 外貌特征\n  occupation TEXT, -- 职业/身份\n  experience TEXT, -- 过往经历\n  personality TEXT -- 性格特点\n);"
+    },
+    "content": [
+      [
+        "row_id",
+        "人物名称",
+        "性别/年龄",
+        "外貌特征",
+        "职业/身份",
+        "过往经历",
+        "性格特点"
+      ]
+    ],
+    "updateConfig": {
+      "uiSentinel": -1,
+      "contextDepth": -1,
+      "updateFrequency": -1,
+      "batchSize": -1,
+      "skipFloors": -1
+    },
+    "exportConfig": {
+      "enabled": false,
+      "splitByRow": false,
+      "entryName": "主角信息",
+      "entryType": "constant",
+      "keywords": "",
+      "preventRecursion": true,
+      "injectionTemplate": "",
+      "extraIndexEnabled": false,
+      "extraIndexEntryName": "主角信息-索引",
+      "extraIndexColumns": [],
+      "extraIndexColumnModes": {},
+      "extraIndexInjectionTemplate": "",
+      "sqlInjectionTemplate": "",
+      "entryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 10000
+      },
+      "extraIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 10010
+      },
+      "fixedEntryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 99990
+      },
+      "fixedIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 99991
+      },
+      "dynamicWindowEnabled": false,
+      "dynamicWindowThreshold": 20,
+      "dynamicWindowFilterColumn": "",
+      "dynamicWindowFilterValue": "",
+      "dynamicWindowLatestRows": 2,
+      "dynamicWindowKeywordRounds": 5,
+      "dynamicWindowPreventDuplicateInsert": false
+    },
+    "orderNo": 0
+  },
+  "sheet_zhong_yao_jue_se_biao": {
+    "uid": "sheet_zhong_yao_jue_se_biao",
+    "name": "重要角色表",
+    "sourceData": {
+      "note": "记录所有关键NPC的详细信息和动态状态。所有信息都必须来源于原文或参考材料，禁止根据预训练知识进行编造和臆测。\n- name (姓名) - NPC的名字。若角色有别称或其他代指方式，在姓名列中必须用逗号分隔开，禁止使用括号解释。\n- gender_age (性别/年龄) - NPC的生理性别和年龄。\n- brief_intro (一句话介绍) – 用不超过30字概括角色身份背景，不含主观评价。\n- appearance (外貌特征) - 对人物外貌的详细描述，对美貌女性角色必须包含身材描写；对男性角色无需描写。描写颜值与身材的固有特征，而不是描写人物的状态。外貌特征必须使用特征性具象描写，可以通过这个描写对应到具体的人，禁止只使用万能通用描写\n- clothing_status (衣着状态) - 人物当前的穿着\n- important_items (持有的重要物品) - NPC拥有的关键重要物品列表，用分号分隔。\n- is_departed (是否离场) - 判断该角色是否能直接与主角互动，填写“是”或“否”。\n- npc_to_user (该角色对主角) - 记录NPC对主角的【态度/立场】与【掌握的情报边界/盲区】。格式为：【态度】当前社交定位与好感倾向；【情报】该角色通过剧情接触已掌握的主角信息，以及未知或误解之处。严禁全知，主角未公开或未暴露的情报一律判定为未知。\n- user_to_npc (主角对该角色) - 记录主角客观上掌握的该角色真实底细与情报边界。格式为：【已知】主角调查/目击/获悉的该角色秘密与底细；【未知】主角尚未发现或误判的盲区。严格依据客观事实与信息暴露状态记录，绝对禁止臆测和脑补主角的主观心理、情绪或好感度。\n- experience (过往经历) - 记录角色背景与关键事件，随剧情增量更新，不超过500字。禁止无上限膨胀，超过500字时需对当前的版本进行信息压缩。\n- combat_ability (实力/能力) – 记录人物的战力位阶与核心手段，总字数不超过200字。格式必须为：【位阶/境界】XX；核心技能/能力（1-8个，分号分隔，注明简要机制/效果）。位阶/境界必须严格使用所处世界观设定的明确等级/位阶/境界，禁止使用“深不可测”、“实力极强”等主观模糊词汇；普通人填“无/凡人”；不清楚就填写\"不明\"。技能只记录最具代表性的标志性能力或特质，禁止罗列全部杂项。",
+      "initNode": "游戏初始化时为当前在场的重要人物分别插入一个条目。",
+      "deleteNode": "禁止删除。",
+      "updateNode": "已有角色的状态、关系、想法或经历变化时更新；之前只有代号的人物的真实姓名出现时；若角色死亡需在姓名旁标注（已死亡）。",
+      "insertNode": "剧情中有未记录的重要人物登场时添加。",
+      "ddl": "CREATE TABLE key_characters (\n  row_id INTEGER PRIMARY KEY,\n  name TEXT, -- 姓名\n  gender_age TEXT, -- 性别/年龄\n  brief_intro TEXT, -- 一句话介绍\n  appearance TEXT, -- 外貌特征\n  clothing_status TEXT, -- 衣着状态\n  important_items TEXT, -- 持有的重要物品\n  is_departed TEXT, -- 是否离场\n  npc_to_user TEXT, -- 该角色对主角\n  user_to_npc TEXT, -- 主角对该角色\n  experience TEXT, -- 过往经历\n  combat_ability TEXT -- 实力/能力\n);"
+    },
+    "content": [
+      [
+        "row_id",
+        "姓名",
+        "性别/年龄",
+        "一句话介绍",
+        "外貌特征",
+        "衣着状态",
+        "持有的重要物品",
+        "是否离场",
+        "该角色对主角",
+        "主角对该角色",
+        "过往经历",
+        "实力/能力"
+      ]
+    ],
+    "updateConfig": {
+      "uiSentinel": -1,
+      "contextDepth": -1,
+      "updateFrequency": -1,
+      "batchSize": -1,
+      "skipFloors": -1
+    },
+    "exportConfig": {
+      "enabled": true,
+      "splitByRow": true,
+      "entryName": "重要角色表",
+      "entryType": "keyword",
+      "keywords": "姓名",
+      "preventRecursion": true,
+      "injectionTemplate": "",
+      "extraIndexEnabled": true,
+      "extraIndexEntryName": "重要人物表-索引",
+      "extraIndexColumns": [
+        "姓名",
+        "一句话介绍"
+      ],
+      "extraIndexColumnModes": {
+        "姓名": "both",
+        "一句话介绍": "index_only"
+      },
+      "extraIndexInjectionTemplate": "以下为已经登场过的角色：\n<已登场角色>\n$1\n</已登场角色>",
+      "sqlInjectionTemplate": "",
+      "entryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 10000,
+        "order": 10000
+      },
+      "extraIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 10000,
+        "order": 8000
+      },
+      "fixedEntryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 10000,
+        "order": 99983
+      },
+      "fixedIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 10000,
+        "order": 99984
+      },
+      "dynamicWindowEnabled": true,
+      "dynamicWindowThreshold": 20,
+      "dynamicWindowFilterColumn": "是否离场",
+      "dynamicWindowFilterValue": "否",
+      "dynamicWindowLatestRows": 5,
+      "dynamicWindowKeywordRounds": 5,
+      "dynamicWindowPreventDuplicateInsert": false
+    },
+    "orderNo": 1
+  },
+  "sheet_ji_yao_biao": {
+    "uid": "sheet_ji_yao_biao",
+    "name": "纪要表",
+    "sourceData": {
+      "note": "轮次日志，交互后必须立即插入一条新记录。\n- code_index (编码索引) - 格式为 AMXXXX，XX从0001递增。\n- time_span (时间跨度) - 本轮事件发生的精确时间范围，如年月日时分等计时方式。\n- summary (概览) - 30字以内，概括纪要内容。\n- chronicle_text (纪要) - 以第三方视角客观记录本轮所有具有记忆价值的事件、信息、对话与信息传递（即所有可能影响后续剧情创作、对人物认知状态理解、事件理解等产生影响的信息，包括但不限于回忆、角色经历介绍、事件详情等），尽可能保证输出的纪要相比正文零信息丢失，必须如实记录全部有记忆价值的内容。\n- key_dialogue (重要对话) -重要对话仅摘录直接推动剧情转折、揭示关键信息、改变人物关系/决策或构成承诺/誓约/约定的原文台词，标明说话人。排除寒暄、重复、情绪感叹。最多5句，不超过150个汉字。\n\n纪要规范：\n- 以第三方视角中立客观记录正文发生的一切，移除所有修辞与对话。不滥用环境描写、不进行动作细节分析、不加评论，不抒情，不升华。\n- 用词直白生活化，避免正式措辞（如“达成协议”“确立计划”）。\n- 记录一切具有信息熵的内容，但是不要写成流水账。\n- 结尾必须开放，在事件自然流动中结束，不得归纳状态或做出封闭式收束。\n- 纪要字数至少300个汉字以上。\n违例：故事仍在继续 / 新的篇章开启 / 二人关系迈入新阶段 / 未来等待着他们。\n- 禁止内容：极端情绪（崩溃、狂喜、绝望等）、夸张、比喻、升华、情绪总结、支配欲、掌控欲、总结性收尾。\n",
+      "initNode": "故事初始化时，插入一条新记录用于记录初始化剧情。",
+      "deleteNode": "禁止删除。",
+      "updateNode": "禁止操作。",
+      "insertNode": "每次交互结束后插入一条新记录。",
+      "ddl": "CREATE TABLE chronicle (\n  row_id INTEGER PRIMARY KEY,\n  code_index TEXT, -- 编码索引\n  time_span TEXT, -- 时间跨度\n  summary TEXT, -- 概览\n  chronicle_text TEXT, -- 纪要\n  key_dialogue TEXT -- 重要对话\n);"
+    },
+    "content": [
+      [
+        "row_id",
+        "编码索引",
+        "时间跨度",
+        "概览",
+        "纪要",
+        "重要对话"
+      ]
+    ],
+    "updateConfig": {
+      "uiSentinel": -1,
+      "contextDepth": -1,
+      "updateFrequency": -1,
+      "batchSize": -1,
+      "skipFloors": -1
+    },
+    "exportConfig": {
+      "enabled": true,
+      "splitByRow": true,
+      "entryName": "纪要",
+      "entryType": "keyword",
+      "keywords": "编码索引",
+      "preventRecursion": true,
+      "injectionTemplate": "<记忆回溯>\n$1\n</记忆回溯>",
+      "extraIndexEnabled": true,
+      "extraIndexEntryName": "纪要索引",
+      "extraIndexColumns": [
+        "概览",
+        "编码索引"
+      ],
+      "extraIndexColumnModes": {
+        "概览": "index_only",
+        "编码索引": "both"
+      },
+      "extraIndexInjectionTemplate": "<已发生的事件概览>\n$1\n</已发生的事件概览>",
+      "sqlInjectionTemplate": "",
+      "entryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 999,
+        "order": 10000
+      },
+      "extraIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 1000,
+        "order": 10010
+      },
+      "fixedEntryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 9999,
+        "order": 99987
+      },
+      "fixedIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 9999,
+        "order": 99988
+      },
+      "dynamicWindowEnabled": false,
+      "dynamicWindowThreshold": 20,
+      "dynamicWindowFilterColumn": "",
+      "dynamicWindowFilterValue": "",
+      "dynamicWindowLatestRows": 2,
+      "dynamicWindowKeywordRounds": 5,
+      "dynamicWindowPreventDuplicateInsert": false
+    },
+    "orderNo": 2
+  },
+  "sheet_zhu_jue_neng_li_biao": {
+    "uid": "sheet_zhu_jue_neng_li_biao",
+    "name": "主角能力表",
+    "sourceData": {
+      "note": "记录主角拥有的所有超凡能力项目，绝对禁止将身体特质或性格特征记录为技能。每个对应的列只能填入对应的内容，没有就填无，绝对禁止在里面填入不相关不对应的属性和描述。\n- ability_name (能力名称) - 功法、技能、魔法、血统等等超凡能力的名称。\n- ability_type (能力类型) - 能力的类别（如：“血统”、“功法”）。\n- rank_quality (阶位/品质) - 能力的品质/阶位，用于描述这种能力在所属世界观的级别，例如天阶功法、大魔术、妖神血统等，阶位只取决于能力本身的位格，与熟练度和等级无关，若所属世界观里不提这种属性填写“无”即可\n- progress_proficiency (进度/熟练度) - 能力的进度或熟练度，若不存在该属性填无。\n- effect_description (效果描述) - 能力在当前等级下的具体效果，不要编造，若你的资料库里没有且剧情没有体现就填“暂不明确”。",
+      "initNode": "游戏初始化时，根据设定为主角添加初始技能。",
+      "deleteNode": "技能因剧情被剥夺或替换时删除。",
+      "updateNode": "已有技能被升级时更新其等级/阶段和效果描述。",
+      "insertNode": "主角获得新的技能时添加。",
+      "ddl": "CREATE TABLE protagonist_abilities ( -- 主角能力表\n  row_id INTEGER PRIMARY KEY, -- 行号\n  ability_name TEXT, -- 能力名称\n  ability_type TEXT, -- 能力类型\n  rank_quality TEXT, -- 阶位/品质\n  progress_proficiency TEXT, -- 进度/熟练度\n  effect_description TEXT -- 效果描述\n);\n"
+    },
+    "content": [
+      [
+        "row_id",
+        "能力名称",
+        "能力类型",
+        "阶位/品质",
+        "进度/熟练度",
+        "效果描述"
+      ]
+    ],
+    "updateConfig": {
+      "uiSentinel": -1,
+      "contextDepth": -1,
+      "updateFrequency": -1,
+      "batchSize": -1,
+      "skipFloors": -1
+    },
+    "exportConfig": {
+      "enabled": false,
+      "splitByRow": false,
+      "entryName": "主角技能表",
+      "entryType": "constant",
+      "keywords": "",
+      "preventRecursion": true,
+      "injectionTemplate": "",
+      "extraIndexEnabled": false,
+      "extraIndexEntryName": "主角技能表-索引",
+      "extraIndexColumns": [],
+      "extraIndexColumnModes": {},
+      "extraIndexInjectionTemplate": "",
+      "sqlInjectionTemplate": "",
+      "entryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 10000
+      },
+      "extraIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 10010
+      },
+      "fixedEntryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 99990
+      },
+      "fixedIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 99991
+      },
+      "dynamicWindowEnabled": false,
+      "dynamicWindowThreshold": 20,
+      "dynamicWindowFilterColumn": "",
+      "dynamicWindowFilterValue": "",
+      "dynamicWindowLatestRows": 2,
+      "dynamicWindowKeywordRounds": 5,
+      "dynamicWindowPreventDuplicateInsert": false
+    },
+    "orderNo": 3
+  },
+  "sheet_zhong_yao_wu_pin_biao": {
+    "uid": "sheet_zhong_yao_wu_pin_biao",
+    "name": "重要物品表",
+    "sourceData": {
+      "note": "记录对当前的主角很有价值的物品，禁止填入杂物。\n- item_name (物品名称) - 物品的名称。\n- category (类别) - 物品的类别（如：“武器”、\"秘籍”）。\n- description (详细描述/效果) - 物品的功能或背景描述。",
+      "initNode": "初始化时，根据剧情与设定添加主角的初始携带物品。",
+      "deleteNode": "物品被完全消耗、丢弃或摧毁时删除。",
+      "updateNode": "已有物品状态变化时更新。",
+      "insertNode": "主角获得全新重要物品时添加。",
+      "ddl": "CREATE TABLE inventory ( -- 重要物品表\n  row_id INTEGER PRIMARY KEY, -- 行号\n  item_name TEXT, -- 物品名称\n  category TEXT, -- 类别\n  description TEXT -- 详细描述/效果\n);\n"
+    },
+    "content": [
+      [
+        "row_id",
+        "物品名称",
+        "类别",
+        "详细描述/效果"
+      ]
+    ],
+    "updateConfig": {
+      "uiSentinel": -1,
+      "contextDepth": -1,
+      "updateFrequency": -1,
+      "batchSize": -1,
+      "skipFloors": -1
+    },
+    "exportConfig": {
+      "enabled": false,
+      "splitByRow": false,
+      "entryName": "重要物品表",
+      "entryType": "constant",
+      "keywords": "",
+      "preventRecursion": true,
+      "injectionTemplate": "",
+      "extraIndexEnabled": false,
+      "extraIndexEntryName": "重要物品表-索引",
+      "extraIndexColumns": [],
+      "extraIndexColumnModes": {},
+      "extraIndexInjectionTemplate": "",
+      "sqlInjectionTemplate": "",
+      "entryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 10000
+      },
+      "extraIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 10010
+      },
+      "fixedEntryPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 99990
+      },
+      "fixedIndexPlacement": {
+        "position": "at_depth_as_system",
+        "depth": 2,
+        "order": 99991
+      },
+      "dynamicWindowEnabled": false,
+      "dynamicWindowThreshold": 20,
+      "dynamicWindowFilterColumn": "",
+      "dynamicWindowFilterValue": "",
+      "dynamicWindowLatestRows": 2,
+      "dynamicWindowKeywordRounds": 5,
+      "dynamicWindowPreventDuplicateInsert": false
+    },
+    "orderNo": 4
+  }
+}

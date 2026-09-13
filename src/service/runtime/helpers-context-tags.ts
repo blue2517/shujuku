@@ -97,30 +97,42 @@ export function getDefaultPlotContextExcludeRules_ACU() {
   );
 }
 
+function removeMatchedBoundaries_ACU(
+  text: string,
+  startBoundary: string,
+  endBoundary: string,
+) {
+  let source = String(text ?? "");
+  const start = String(startBoundary || "");
+  const end = String(endBoundary || "");
+  if (!source || !start || !end) return source;
+
+  const lowerStart = start.toLowerCase();
+  const lowerEnd = end.toLowerCase();
+
+  while (true) {
+    const lowerSource = source.toLowerCase();
+    const startIdx = lowerSource.indexOf(lowerStart);
+    if (startIdx === -1) break;
+
+    const endIdx = lowerSource.indexOf(lowerEnd, startIdx + start.length);
+    if (endIdx === -1) break;
+
+    const removeTo = endIdx + end.length;
+    if (removeTo <= startIdx) break;
+
+    source = source.slice(0, startIdx) + source.slice(removeTo);
+  }
+
+  return source;
+}
+
 function removeLastMatchedBoundary_ACU(
   text: string,
   startBoundary: string,
   endBoundary: string,
 ) {
-  const source = String(text ?? "");
-  const start = String(startBoundary || "");
-  const end = String(endBoundary || "");
-  if (!source || !start || !end) return source;
-
-  const lowerSource = source.toLowerCase();
-  const lowerStart = start.toLowerCase();
-  const lowerEnd = end.toLowerCase();
-
-  const endIdx = lowerSource.lastIndexOf(lowerEnd);
-  if (endIdx === -1) return source;
-
-  const startIdx = lowerSource.lastIndexOf(lowerStart, Math.max(0, endIdx - 1));
-  if (startIdx === -1) return source;
-
-  const removeTo = endIdx + end.length;
-  if (removeTo <= startIdx) return source;
-
-  return source.slice(0, startIdx) + source.slice(removeTo);
+  return removeMatchedBoundaries_ACU(text, startBoundary, endBoundary);
 }
 
 export function applyExcludeRulesToText_ACU(
@@ -132,7 +144,7 @@ export function applyExcludeRulesToText_ACU(
   if (!result || rules.length === 0) return result;
 
   rules.forEach((rule) => {
-    result = removeLastMatchedBoundary_ACU(result, rule.start, rule.end);
+    result = removeMatchedBoundaries_ACU(result, rule.start, rule.end);
   });
 
   return result.replace(/\n{3,}/g, "\n\n").trim();

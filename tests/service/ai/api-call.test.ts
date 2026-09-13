@@ -377,7 +377,7 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(body.max_tokens).toBe(100);
   });
 
-  it('无配置时使用默认值', () => {
+  it('无配置时使用默认值，且不附带硬编码的 reasoning_effort', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],
       { url: 'https://api.example.com', model: 'gpt-4' },
@@ -385,6 +385,38 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(body.max_tokens).toBe(20000);
     expect(body.temperature).toBe(1.0);
     expect(body.top_p).toBe(0.95);
+    expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('配置思考强度时正确注入 body.reasoning_effort', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gemini-3.7-flash', reasoning_effort: 'high' },
+    );
+    expect(body.reasoning_effort).toBe('high');
+  });
+
+  it('思考强度为 default 或 none 时不注入 body.reasoning_effort', () => {
+    const bodyDefault = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', reasoning_effort: 'default' },
+    );
+    expect(bodyDefault).not.toHaveProperty('reasoning_effort');
+
+    const bodyNone = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', reasoning_effort: 'none' },
+    );
+    expect(bodyNone).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('overrides.reasoning_effort 优先于 effectiveApiConfig.reasoning_effort', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', reasoning_effort: 'low' },
+      { reasoning_effort: 'max' },
+    );
+    expect(body.reasoning_effort).toBe('max');
   });
 
   it('messages 的 role 以大写 SYSTEM/USER 传入时归一为小写', () => {

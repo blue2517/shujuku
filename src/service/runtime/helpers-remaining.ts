@@ -15,6 +15,7 @@ import { logDebug_ACU } from '../../shared/utils';
 import { parseRandomTags_ACU, replaceRandomVariables_ACU, parseCalcTags_ACU, parseMaxTags_ACU, parseMinTags_ACU, replaceCalcVariables_ACU, replaceMaxVariables_ACU, replaceMinVariables_ACU, parseIfBlockRecursive_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from './template-vars';
 import { getPlotFromHistory_ACU, getWorldbookContentForPlot_ACU, getAgentControlledWorldbookEntriesForFinalPrompt_ACU } from './plot-runtime';
 import { isWorldbookTakeoverActive_ACU } from '../agent/agent-worldbook-takeover';
+import { substituteWorldbookMacros_ACU } from '../worldbook/macro-resolver';
 
 // ═══ 上下文标签提取/过滤 ═══
 export {
@@ -109,7 +110,7 @@ export {
   }
 
   function formatAgentWorldbookEntryForPrompt_ACU(entry: any) {
-    const content = String(entry?.content || '').trim();
+    const content = substituteWorldbookMacros_ACU(String(entry?.content || '')).trim();
     if (!content) return '';
     const comment = String(entry?.comment || '').trim();
     const marker = comment ? `[ACU Agent Greenlight: ${comment}]` : '[ACU Agent Greenlight]';

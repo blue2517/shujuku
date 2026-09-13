@@ -64638,14 +64638,14 @@ $CONTENT
         };
         for (const segment of promptSegments) {
             let finalContent = segment.content;
-            finalContent = finalContent.replace('$0', filterTableInjectedContent(dynamicContent.tableDataText, '$0'));
-            finalContent = finalContent.replace('$1', filterTableInjectedContent(dynamicContent.messagesText, '$1'));
-            finalContent = finalContent.replace('$4', filterTableInjectedContent(dynamicContent.worldbookContent, '$4'));
-            finalContent = finalContent.replace(/\$6/g, filterTableInjectedContent(lastPlotContent || '', '$6'));
-            finalContent = finalContent.replace('$8', filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'));
-            finalContent = finalContent.replace(/\$9/g, filterTableInjectedContent(dynamicContent.worldbookDatabaseExcludedContent || '', '$9'));
-            finalContent = finalContent.replace(/\$U/g, filterTableInjectedContent(userInfoContent_Table, '$U'));
-            finalContent = finalContent.replace(/\$C/g, filterTableInjectedContent(charInfoContent_Table, '$C'));
+            finalContent = finalContent.replace(/\$0/g, () => filterTableInjectedContent(dynamicContent.tableDataText, '$0'));
+            finalContent = finalContent.replace(/\$1/g, () => filterTableInjectedContent(dynamicContent.messagesText, '$1'));
+            finalContent = finalContent.replace(/\$4/g, () => filterTableInjectedContent(dynamicContent.worldbookContent, '$4'));
+            finalContent = finalContent.replace(/\$6/g, () => filterTableInjectedContent(lastPlotContent || '', '$6'));
+            finalContent = finalContent.replace(/\$8/g, () => filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'));
+            finalContent = finalContent.replace(/\$9/g, () => filterTableInjectedContent(dynamicContent.worldbookDatabaseExcludedContent || '', '$9'));
+            finalContent = finalContent.replace(/\$U/g, () => filterTableInjectedContent(userInfoContent_Table, '$U'));
+            finalContent = finalContent.replace(/\$C/g, () => filterTableInjectedContent(charInfoContent_Table, '$C'));
             if (typeof dynamicContent?.resolveTableWorldbookContent === 'function') {
                 const tableTokens = [];
                 const seenTableTokens = new Set();
@@ -64939,6 +64939,10 @@ $CONTENT
         const temperature = Number(source.temperature ?? 1);
         const rawPostProc = String(source.postProcessing ?? source.custom_prompt_post_processing ?? 'none').trim().toLowerCase();
         const postProcessing = ['none', 'strict', 'default'].includes(rawPostProc) ? rawPostProc : 'none';
+        const rawReasoning = typeof source.reasoning_effort === 'string' ? source.reasoning_effort.trim().toLowerCase() : '';
+        const reasoning_effort = ['default', 'none', 'auto', 'min', 'low', 'medium', 'high', 'max'].includes(rawReasoning)
+            ? rawReasoning
+            : (rawReasoning || 'default');
         // [修复] 保留源对象中所有非白名单字段（如 topP/top_p/frequency_penalty），
         // 避免对运行中 apiConfig 的归一化破坏调用方依赖的透传字段。
         return {
@@ -64949,11 +64953,12 @@ $CONTENT
             max_tokens: Number.isFinite(maxTokens) && maxTokens >= 0 ? Math.floor(maxTokens) : 60000,
             maxTokens: Number.isFinite(maxTokens) && maxTokens >= 0 ? Math.floor(maxTokens) : 60000,
             temperature: Number.isFinite(temperature) ? temperature : 1,
+            reasoning_effort,
             bodyParams: typeof source.bodyParams === 'string' ? source.bodyParams : '',
             excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
             requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
             postProcessing,
-            ...Object.fromEntries(Object.entries(source).filter(([key]) => !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'postProcessing'].includes(key))),
+            ...Object.fromEntries(Object.entries(source).filter(([key]) => !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'reasoning_effort', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'postProcessing'].includes(key))),
         };
     }
     function normalizePreset_ACU(value) {
@@ -65385,6 +65390,8 @@ $CONTENT
         const maxTokens = opts.maxTokens ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 20000;
         const temperature = opts.temperature ?? effectiveApiConfig.temperature ?? 1.0;
         const topP = opts.topP ?? effectiveApiConfig.top_p ?? effectiveApiConfig.topP ?? 0.95;
+        const rawReasoning = opts.reasoning_effort ?? effectiveApiConfig.reasoning_effort;
+        const reasoningEffort = typeof rawReasoning === 'string' ? rawReasoning.trim() : '';
         // 基础 Authorization 头
         let headers = effectiveApiConfig.apiKey ? `Authorization: Bearer ${effectiveApiConfig.apiKey}` : '';
         // 追加 requestHeaders
@@ -65423,7 +65430,6 @@ $CONTENT
             chat_completion_source: 'custom',
             group_names: [],
             include_reasoning: false,
-            reasoning_effort: 'medium',
             enable_web_search: false,
             request_images: false,
             custom_prompt_post_processing: effectiveApiConfig.postProcessing || effectiveApiConfig.custom_prompt_post_processing || 'none',
@@ -65434,6 +65440,9 @@ $CONTENT
             custom_include_body: effectiveApiConfig.bodyParams || '',
             custom_exclude_body: normalizeExcludeBodyParamsForSillyTavern_ACU(effectiveApiConfig.excludeBodyParams),
         };
+        if (reasoningEffort && reasoningEffort !== 'default' && reasoningEffort !== 'none') {
+            body.reasoning_effort = reasoningEffort;
+        }
         return body;
     }
     /**
@@ -67915,25 +67924,31 @@ $CONTENT
     function getDefaultPlotContextExcludeRules_ACU() {
         return normalizeExcludeRules_ACU(DEFAULT_PLOT_SETTINGS_ACU.contextExcludeRules, DEFAULT_PLOT_SETTINGS_ACU.contextExcludeTags || "");
     }
-    function removeLastMatchedBoundary_ACU(text, startBoundary, endBoundary) {
-        const source = String(text ?? "");
+    function removeMatchedBoundaries_ACU(text, startBoundary, endBoundary) {
+        let source = String(text ?? "");
         const start = String(startBoundary || "");
         const end = String(endBoundary || "");
         if (!source || !start || !end)
             return source;
-        const lowerSource = source.toLowerCase();
         const lowerStart = start.toLowerCase();
         const lowerEnd = end.toLowerCase();
-        const endIdx = lowerSource.lastIndexOf(lowerEnd);
-        if (endIdx === -1)
-            return source;
-        const startIdx = lowerSource.lastIndexOf(lowerStart, Math.max(0, endIdx - 1));
-        if (startIdx === -1)
-            return source;
-        const removeTo = endIdx + end.length;
-        if (removeTo <= startIdx)
-            return source;
-        return source.slice(0, startIdx) + source.slice(removeTo);
+        while (true) {
+            const lowerSource = source.toLowerCase();
+            const startIdx = lowerSource.indexOf(lowerStart);
+            if (startIdx === -1)
+                break;
+            const endIdx = lowerSource.indexOf(lowerEnd, startIdx + start.length);
+            if (endIdx === -1)
+                break;
+            const removeTo = endIdx + end.length;
+            if (removeTo <= startIdx)
+                break;
+            source = source.slice(0, startIdx) + source.slice(removeTo);
+        }
+        return source;
+    }
+    function removeLastMatchedBoundary_ACU(text, startBoundary, endBoundary) {
+        return removeMatchedBoundaries_ACU(text, startBoundary, endBoundary);
     }
     function applyExcludeRulesToText_ACU(text, { excludeRules = [], excludeTags = "" } = {}) {
         let result = String(text ?? "");
@@ -67941,7 +67956,7 @@ $CONTENT
         if (!result || rules.length === 0)
             return result;
         rules.forEach((rule) => {
-            result = removeLastMatchedBoundary_ACU(result, rule.start, rule.end);
+            result = removeMatchedBoundaries_ACU(result, rule.start, rule.end);
         });
         return result.replace(/\n{3,}/g, "\n\n").trim();
     }
@@ -70548,6 +70563,132 @@ $CONTENT
     // 数据格式化
 
     /**
+     * src/service/worldbook/macro-resolver.ts — 世界书宏解析器
+     *
+     * 负责对世界书条目内容中包含的酒馆宏（如 {{webSearchResults}}, {{user}}, {{char}}, {{getvar::...}} 等）
+     * 进行动态展开，对齐酒馆原生 Lorebook 插入上下文时的宏替换机制。
+     */
+    /**
+     * 替换世界书条目文本中的酒馆宏（同步模式）
+     *
+     * @param text 待替换的条目文本
+     * @returns 宏展开后的真实文本。若环境不可用或发生错误，安全降级返回原文本。
+     */
+    function substituteWorldbookMacros_ACU(text) {
+        if (!text || typeof text !== 'string')
+            return text || '';
+        if (!text.includes('{{'))
+            return text;
+        try {
+            const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+            const st = globalScope?.SillyTavern || SillyTavern_API_ACU;
+            const ctx = typeof st?.getContext === 'function' ? st.getContext() : null;
+            // 1. 优先调用 SillyTavern.getContext().substituteParamsExtended
+            // 这是酒馆最完整的宏解析引擎，支持扩展注册宏（如 webSearchResults）与变量宏
+            if (typeof ctx?.substituteParamsExtended === 'function') {
+                const res = ctx.substituteParamsExtended(text);
+                if (typeof res === 'string')
+                    return res;
+            }
+            // 2. 尝试 TavernHelper 提供的 substitudeMacros
+            const th = globalScope?.TavernHelper || TavernHelper_API_ACU;
+            if (typeof th?.substitudeMacros === 'function') {
+                const res = th.substitudeMacros(text);
+                if (typeof res === 'string')
+                    return res;
+            }
+            // 3. 降级尝试 SillyTavern.getContext().substituteParams
+            if (typeof ctx?.substituteParams === 'function') {
+                const res = ctx.substituteParams(text);
+                if (typeof res === 'string')
+                    return res;
+            }
+            // 4. 降级尝试全局宏解析函数
+            if (typeof globalScope?.substituteParamsExtended === 'function') {
+                const res = globalScope.substituteParamsExtended(text);
+                if (typeof res === 'string')
+                    return res;
+            }
+            if (typeof globalScope?.substitudeMacros === 'function') {
+                const res = globalScope.substitudeMacros(text);
+                if (typeof res === 'string')
+                    return res;
+            }
+            if (typeof globalScope?.substituteParams === 'function') {
+                const res = globalScope.substituteParams(text);
+                if (typeof res === 'string')
+                    return res;
+            }
+        }
+        catch (error) {
+            logWarn_ACU('[Worldbook] 解析条目宏失败，保留原文本:', error);
+        }
+        return text;
+    }
+    /**
+     * 替换世界书条目文本中的酒馆宏（异步模式，完整支持可能返回 Promise 的宏扩展）
+     *
+     * @param text 待替换的条目文本
+     * @returns 宏展开后的真实文本。
+     */
+    async function substituteWorldbookMacrosAsync_ACU(text) {
+        if (!text || typeof text !== 'string')
+            return text || '';
+        if (!text.includes('{{'))
+            return text;
+        try {
+            const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+            const st = globalScope?.SillyTavern || SillyTavern_API_ACU;
+            const ctx = typeof st?.getContext === 'function' ? st.getContext() : null;
+            // 1. 优先调用 SillyTavern.getContext().substituteParamsExtended
+            if (typeof ctx?.substituteParamsExtended === 'function') {
+                const res = ctx.substituteParamsExtended(text);
+                const resolved = res instanceof Promise ? await res : res;
+                if (typeof resolved === 'string')
+                    return resolved;
+            }
+            // 2. 尝试 TavernHelper 提供的 substitudeMacros
+            const th = globalScope?.TavernHelper || TavernHelper_API_ACU;
+            if (typeof th?.substitudeMacros === 'function') {
+                const res = th.substitudeMacros(text);
+                const resolved = res instanceof Promise ? await res : res;
+                if (typeof resolved === 'string')
+                    return resolved;
+            }
+            // 3. 降级尝试 SillyTavern.getContext().substituteParams
+            if (typeof ctx?.substituteParams === 'function') {
+                const res = ctx.substituteParams(text);
+                const resolved = res instanceof Promise ? await res : res;
+                if (typeof resolved === 'string')
+                    return resolved;
+            }
+            // 4. 降级尝试全局宏解析函数
+            if (typeof globalScope?.substituteParamsExtended === 'function') {
+                const res = globalScope.substituteParamsExtended(text);
+                const resolved = res instanceof Promise ? await res : res;
+                if (typeof resolved === 'string')
+                    return resolved;
+            }
+            if (typeof globalScope?.substitudeMacros === 'function') {
+                const res = globalScope.substitudeMacros(text);
+                const resolved = res instanceof Promise ? await res : res;
+                if (typeof resolved === 'string')
+                    return resolved;
+            }
+            if (typeof globalScope?.substituteParams === 'function') {
+                const res = globalScope.substituteParams(text);
+                const resolved = res instanceof Promise ? await res : res;
+                if (typeof resolved === 'string')
+                    return resolved;
+            }
+        }
+        catch (error) {
+            logWarn_ACU('[Worldbook] 异步解析条目宏失败，保留原文本:', error);
+        }
+        return text;
+    }
+
+    /**
      * service/runtime/helpers-table-lock.ts — 表格锁定与索引
      * 从 helpers-remaining.ts 拆出
      */
@@ -70769,7 +70910,7 @@ $CONTENT
         return 'inChat';
     }
     function formatAgentWorldbookEntryForPrompt_ACU(entry) {
-        const content = String(entry?.content || '').trim();
+        const content = substituteWorldbookMacros_ACU(String(entry?.content || '')).trim();
         if (!content)
             return '';
         const comment = String(entry?.comment || '').trim();
@@ -72101,6 +72242,135 @@ $CONTENT
         };
         return [...new Set([...toStrArray(entry?.key), ...toStrArray(entry?.keys)])].map(k => k.toLowerCase());
     }
+    function normalizeWorldbookRawKeyList_ACU(input) {
+        const results = [];
+        const add = (val) => {
+            if (typeof val === 'string') {
+                const trimmed = val.trim();
+                if (!trimmed)
+                    return;
+                if (/^\/.+\/[a-z]*$/i.test(trimmed)) {
+                    results.push(trimmed);
+                }
+                else {
+                    trimmed.split(/[,，]/).forEach(item => {
+                        const itemTrimmed = item.trim();
+                        if (itemTrimmed)
+                            results.push(itemTrimmed);
+                    });
+                }
+            }
+            else if (Array.isArray(val)) {
+                val.forEach(add);
+            }
+        };
+        add(input);
+        return [...new Set(results)];
+    }
+    function getWorldbookPrimaryKeys_ACU(entry) {
+        const fromKeys = normalizeWorldbookRawKeyList_ACU(entry?.keys);
+        const fromKey = normalizeWorldbookRawKeyList_ACU(entry?.key);
+        return [...new Set([...fromKeys, ...fromKey])];
+    }
+    function getWorldbookSecondaryKeys_ACU(entry) {
+        const fromSecondary = normalizeWorldbookRawKeyList_ACU(entry?.keysecondary);
+        const fromFilters = normalizeWorldbookRawKeyList_ACU(entry?.filters);
+        const fromSecondaryKeys = normalizeWorldbookRawKeyList_ACU(entry?.secondary_keys);
+        return [...new Set([...fromSecondary, ...fromFilters, ...fromSecondaryKeys])];
+    }
+    function getWorldbookLogic_ACU(entry) {
+        const rawLogic = entry?.selectiveLogic !== undefined ? entry.selectiveLogic : entry?.logic;
+        if (typeof rawLogic === 'number') {
+            switch (rawLogic) {
+                case 0: return 'and_any';
+                case 1: return 'not_all';
+                case 2: return 'not_any';
+                case 3: return 'and_all';
+                default: return 'and_any';
+            }
+        }
+        const strLogic = String(rawLogic || '').trim().toLowerCase().replace(/[-_ ]/g, '');
+        if (strLogic === 'andall' || strLogic === 'all' || strLogic === '与所有')
+            return 'and_all';
+        if (strLogic === 'notany' || strLogic === 'none' || strLogic === '非任何')
+            return 'not_any';
+        if (strLogic === 'notall' || strLogic === '非所有')
+            return 'not_all';
+        if (strLogic === 'andany' || strLogic === 'any' || strLogic === '与任意')
+            return 'and_any';
+        return 'and_any';
+    }
+    function matchSingleWorldbookKey_ACU(rawKey, text, options = {}) {
+        const trimmed = String(rawKey || '').trim();
+        if (!trimmed || !text)
+            return false;
+        // 支持正则表达式语法 /pattern/flags（默认忽略大小写）
+        const regexMatch = trimmed.match(/^\/(.+)\/([a-z]*)$/i);
+        if (regexMatch) {
+            try {
+                let flags = regexMatch[2] || '';
+                if (!flags.includes('i'))
+                    flags += 'i';
+                const regex = new RegExp(regexMatch[1], flags);
+                return regex.test(text);
+            }
+            catch {
+                return false;
+            }
+        }
+        // 整词匹配支持：条目开启 match_whole_words 时，对英文/数字关键词使用单词边界保护
+        if (options.matchWholeWords === true) {
+            try {
+                const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const regex = new RegExp(`(?:^|\\b)${escaped}(?:\\b|$)`, 'i');
+                if (regex.test(text))
+                    return true;
+                // 中文等非 ASCII 字符无英文单词边界，平滑回退包含匹配
+                if (/[^\x00-\x7F]/.test(trimmed)) {
+                    return text.toLowerCase().includes(trimmed.toLowerCase());
+                }
+                return false;
+            }
+            catch {
+                return text.toLowerCase().includes(trimmed.toLowerCase());
+            }
+        }
+        // 普通文本一律保持统一小写匹配，不区分大小写
+        return text.toLowerCase().includes(trimmed.toLowerCase());
+    }
+    function evaluateWorldbookEntryTrigger_ACU(entry, scanText) {
+        if (!entry || typeof entry !== 'object' || !scanText)
+            return false;
+        const matchOptions = {
+            matchWholeWords: entry.match_whole_words === true,
+        };
+        const primaryKeys = getWorldbookPrimaryKeys_ACU(entry);
+        if (primaryKeys.length === 0)
+            return false;
+        const primaryMatched = primaryKeys.some(key => matchSingleWorldbookKey_ACU(key, scanText, matchOptions));
+        if (!primaryMatched)
+            return false;
+        const secondaryKeys = getWorldbookSecondaryKeys_ACU(entry);
+        if (secondaryKeys.length === 0) {
+            // 无次要过滤器时，主关键字命中即触发
+            return true;
+        }
+        const logic = getWorldbookLogic_ACU(entry);
+        const totalCount = secondaryKeys.length;
+        const matchedCount = secondaryKeys.filter(key => matchSingleWorldbookKey_ACU(key, scanText, matchOptions)).length;
+        switch (logic) {
+            case 'and_all': // 与所有
+                return matchedCount === totalCount;
+            case 'not_any': // 非任何
+                return matchedCount === 0;
+            case 'and_any': // 与任意
+                return matchedCount > 0;
+            case 'not_all': // 非所有
+                return matchedCount < totalCount;
+            default:
+                return matchedCount > 0;
+        }
+    }
     function getWorldbookEntryPlaceholderSortKey_ACU(entry) {
         const position = normalizeLorebookPosition_ACU(entry?.position, 'at_depth_as_system');
         const order = getEntryOrderNumber_ACU(entry);
@@ -72289,7 +72559,7 @@ $CONTENT
         if (includeConstantEntriesInBaseScan) {
             const constantBaseText = constantEntries
                 .filter(entry => !entry.prevent_recursion)
-                .map(entry => entry.content || '')
+                .map(entry => substituteWorldbookMacros_ACU(entry.content || ''))
                 .join('\n')
                 .toLowerCase();
             if (constantBaseText) {
@@ -72304,14 +72574,14 @@ $CONTENT
             let hasChangedInThisPass = false;
             const recursionSourceContent = Array.from(triggeredEntries)
                 .filter(entry => !entry.prevent_recursion)
-                .map(entry => entry.content)
+                .map(entry => substituteWorldbookMacros_ACU(entry.content || ''))
                 .join('\n')
                 .toLowerCase();
             const fullSearchText = `${baseScanText}\n${recursionSourceContent}`;
             const remainingKeywordEntries = [];
             for (const entry of keywordEntries) {
-                const keywords = getWorldbookEntryKeywords_ACU(entry);
-                const isTriggered = keywords.length > 0 && keywords.some(keyword => entry.exclude_recursion ? baseScanText.includes(keyword) : fullSearchText.includes(keyword));
+                const searchText = entry.exclude_recursion ? baseScanText : fullSearchText;
+                const isTriggered = evaluateWorldbookEntryTrigger_ACU(entry, searchText);
                 if (isTriggered) {
                     triggeredEntries.add(entry);
                     hasChangedInThisPass = true;
@@ -72340,7 +72610,10 @@ $CONTENT
             ? formatEntry
             : ((entry) => `# ${entry.comment || `Entry from ${entry.bookName}`}\n${entry.content}`);
         return (Array.isArray(entries) ? entries : [])
-            .map(entry => effectiveFormatEntry(entry))
+            .map(entry => {
+            const formatted = effectiveFormatEntry(entry);
+            return substituteWorldbookMacros_ACU(typeof formatted === 'string' ? formatted : String(entry?.content || ''));
+        })
             .filter(chunk => typeof chunk === 'string' && chunk.trim())
             .join('\n\n')
             .trim();
@@ -72348,7 +72621,10 @@ $CONTENT
     async function buildCombinedWorldbookContentByStrategy_ACU(options = {}) {
         const logPrefix = String(options?.logPrefix || '[Worldbook]');
         const finalEntries = await collectCombinedWorldbookEntriesByStrategy_ACU(options);
-        const combinedContent = formatCombinedWorldbookEntries_ACU(finalEntries, options?.formatEntry);
+        let combinedContent = formatCombinedWorldbookEntries_ACU(finalEntries, options?.formatEntry);
+        if (combinedContent && combinedContent.includes('{{')) {
+            combinedContent = await substituteWorldbookMacrosAsync_ACU(combinedContent);
+        }
         if (!combinedContent) {
             logDebug_ACU(`${logPrefix} No worldbook entries were ultimately triggered.`);
             return '';
@@ -72397,7 +72673,7 @@ $CONTENT
                 bookNames,
                 entriesByBook: options?.entriesByBook,
                 readContext: options?.readContext,
-                formatEntry: (entry) => String(entry?.content || '').trim(),
+                formatEntry: (entry) => substituteWorldbookMacros_ACU(String(entry?.content || '')).trim(),
                 baseScanText: (typeof initialScanTextOverride === 'string' && initialScanTextOverride.trim()) ? initialScanTextOverride : '',
                 fallbackScanText: allChatMessages_ACU.map(message => message.message).join('\n'),
                 entryStateView,
@@ -128938,6 +129214,7 @@ Expected function or array of functions, received type ${typeof value}.`
             max_tokens: 60000,
             temperature: 1,
             tavernProfile: '',
+            reasoning_effort: 'default',
             bodyParams: '',
             excludeBodyParams: '',
             requestHeaders: '',
@@ -128955,6 +129232,7 @@ Expected function or array of functions, received type ${typeof value}.`
             max_tokens: Number(preset.apiConfig.max_tokens || 60000),
             temperature: Number(preset.apiConfig.temperature ?? 1),
             tavernProfile: preset.tavernProfile || '',
+            reasoning_effort: preset.apiConfig.reasoning_effort || 'default',
             bodyParams: preset.apiConfig.bodyParams || '',
             excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
             requestHeaders: preset.apiConfig.requestHeaders || '',
@@ -128973,6 +129251,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 useMainApi: draft.useMainApi,
                 max_tokens: Math.max(1, Math.floor(Number(draft.max_tokens) || 60000)),
                 temperature: Number.isFinite(Number(draft.temperature)) ? Number(draft.temperature) : 1,
+                reasoning_effort: draft.reasoning_effort || 'default',
                 bodyParams: draft.bodyParams || '',
                 excludeBodyParams: draft.excludeBodyParams || '',
                 requestHeaders: draft.requestHeaders || '',
@@ -129046,6 +129325,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 preset.apiConfig.model === current.apiConfig.model &&
                 preset.apiConfig.max_tokens === current.apiConfig.max_tokens &&
                 preset.apiConfig.temperature === current.apiConfig.temperature &&
+                (preset.apiConfig.reasoning_effort || 'default') === (current.apiConfig.reasoning_effort || 'default') &&
                 preset.apiConfig.bodyParams === current.apiConfig.bodyParams &&
                 preset.apiConfig.excludeBodyParams === current.apiConfig.excludeBodyParams &&
                 preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders);
@@ -130019,6 +130299,15 @@ Expected function or array of functions, received type ${typeof value}.`
                 { value: "strict", label: "严格兼容 (strict) — 仅首段系统词，中间降级为用户词并合并" },
                 { value: "default", label: "酒馆默认 (default) — 遵循酒馆内置规则" },
             ];
+            const reasoningEffortOptions = [
+                { value: "default", label: "不指定 / 默认 (不发送该字段)" },
+                { value: "low", label: "低 (low)" },
+                { value: "medium", label: "中 (medium)" },
+                { value: "high", label: "高 (high)" },
+                { value: "max", label: "最大 (max)" },
+                { value: "min", label: "最小 (min)" },
+                { value: "auto", label: "自动 (auto)" },
+            ];
             const modelSelectOptions = computed(() => store.modelOptions.map((m) => ({ value: m, label: m })));
             const tavernProfileOptions = computed(() => store.tavernProfiles.map((p) => ({ value: p.id, label: p.name })));
             const presetDropdownItems = computed(() => store.presets.map((p) => ({
@@ -130142,14 +130431,14 @@ Expected function or array of functions, received type ${typeof value}.`
                 });
             }
             watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
-            const __returned__ = { store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeConnectionMode, activeDraftDirty, connectionModeOptions, postProcessingOptions, modelSelectOptions, tavernProfileOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, setActiveConnectionMode, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSegmentedControl, AcuSelect };
+            const __returned__ = { store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeConnectionMode, activeDraftDirty, connectionModeOptions, postProcessingOptions, reasoningEffortOptions, modelSelectOptions, tavernProfileOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, setActiveConnectionMode, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSegmentedControl, AcuSelect };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-07d09ac7] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-07d09ac7] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-07d09ac7] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-07d09ac7] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-07d09ac7] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-07d09ac7] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-07d09ac7] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-07d09ac7] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-07d09ac7");
-    var ApiConfigPanel_vue_vue_type_style_index_0_scoped_07d09ac7_lang = null;
+    injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-1af1dc3a] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-1af1dc3a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-1af1dc3a] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-1af1dc3a] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-1af1dc3a] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-1af1dc3a] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-1af1dc3a] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-1af1dc3a] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-1af1dc3a");
+    var ApiConfigPanel_vue_vue_type_style_index_0_scoped_1af1dc3a_lang = null;
 
     const _hoisted_1$R = { class: "acu-api-config-panel__select-row" };
     const _hoisted_2$K = { class: "acu-api-config-panel__editor-section" };
@@ -130182,7 +130471,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+				default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -130281,7 +130570,7 @@ Expected function or array of functions, received type ${typeof value}.`
 									_: 1
 								}),
 								createBaseVNode("div", _hoisted_3$C, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-									default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+									default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
 										"加载模型",
 										-1
 										/* CACHED */
@@ -130322,7 +130611,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								}, null, 8, ["options", "model-value"])]),
 								_: 1
 							}), createBaseVNode("div", _hoisted_6$o, [createVNode($setup["AcuButton"], { onClick: $setup.store.refreshTavernProfiles }, {
-								default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+								default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 									"刷新列表",
 									-1
 									/* CACHED */
@@ -130366,12 +130655,23 @@ Expected function or array of functions, received type ${typeof value}.`
 							_: 1
 						}),
 						createVNode($setup["AcuFormRow"], {
+							label: "思考强度",
+							hint: "用于支持思考/内置思维链的模型（如 Gemini 2.5/3.7、o1/o3、DeepSeek-R1 等）。若模型不支持请选'不指定'。"
+						}, {
+							default: withCtx(() => [createVNode($setup["AcuSelect"], {
+								options: $setup.reasoningEffortOptions,
+								"model-value": $setup.activeDraft.reasoning_effort || "default",
+								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.reasoning_effort = $event)
+							}, null, 8, ["model-value"])]),
+							_: 1
+						}),
+						createVNode($setup["AcuFormRow"], {
 							label: "附加主体参数",
 							hint: "SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.bodyParams,
-								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.bodyParams = $event),
+								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.bodyParams = $event),
 								rows: 3,
 								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
 							}, null, 8, ["modelValue"])]),
@@ -130383,7 +130683,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.excludeBodyParams,
-								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
 								rows: 2,
 								placeholder: "top_p, reasoning_effort"
 							}, null, 8, ["modelValue"])]),
@@ -130395,7 +130695,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.requestHeaders = $event),
+								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.requestHeaders = $event),
 								rows: 2,
 								placeholder: "X-Custom-Header: value"
 							}, null, 8, ["modelValue"])]),
@@ -130417,7 +130717,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -130442,7 +130742,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+				default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -130453,7 +130753,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		_: 1
 	}, 8, ["title", "description"]);
     }
-    var ApiConfigPanel = /*#__PURE__*/ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-07d09ac7"]]);
+    var ApiConfigPanel = /*#__PURE__*/ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-1af1dc3a"]]);
 
     // ═══════════════════════════════════════════════════════════
     // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用

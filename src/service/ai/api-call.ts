@@ -22,7 +22,7 @@ function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
 export function buildCustomApiRequestBody_ACU(
   messages: any[],
   effectiveApiConfig: any,
-  overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean }
+  overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean; reasoning_effort?: string }
 ): Record<string, any> {
   const opts = overrides || {};
   const model = opts.stripModelPrefix !== false
@@ -31,6 +31,8 @@ export function buildCustomApiRequestBody_ACU(
   const maxTokens = opts.maxTokens ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 20000;
   const temperature = opts.temperature ?? effectiveApiConfig.temperature ?? 1.0;
   const topP = opts.topP ?? effectiveApiConfig.top_p ?? effectiveApiConfig.topP ?? 0.95;
+  const rawReasoning = opts.reasoning_effort ?? effectiveApiConfig.reasoning_effort;
+  const reasoningEffort = typeof rawReasoning === 'string' ? rawReasoning.trim() : '';
 
   // 基础 Authorization 头
   let headers = effectiveApiConfig.apiKey ? `Authorization: Bearer ${effectiveApiConfig.apiKey}` : '';
@@ -73,7 +75,6 @@ export function buildCustomApiRequestBody_ACU(
     chat_completion_source: 'custom',
     group_names: [],
     include_reasoning: false,
-    reasoning_effort: 'medium',
     enable_web_search: false,
     request_images: false,
     custom_prompt_post_processing: effectiveApiConfig.postProcessing || effectiveApiConfig.custom_prompt_post_processing || 'none',
@@ -84,6 +85,10 @@ export function buildCustomApiRequestBody_ACU(
     custom_include_body: effectiveApiConfig.bodyParams || '',
     custom_exclude_body: normalizeExcludeBodyParamsForSillyTavern_ACU(effectiveApiConfig.excludeBodyParams),
   };
+
+  if (reasoningEffort && reasoningEffort !== 'default' && reasoningEffort !== 'none') {
+    body.reasoning_effort = reasoningEffort;
+  }
 
   return body;
 }
