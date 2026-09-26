@@ -5,7 +5,7 @@ import { handleApiResponse_ACU } from './prompt-builder';
 import { settings_ACU } from '../runtime/state-manager';
 import { isGenerateRawAvailable_ACU, generateRaw_ACU, sendConnectionManagerRequest_ACU, getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
+import { resolveApiConfigByPreset_ACU, type ApiPresetApiConfig_ACU } from '../settings/api-preset-service';
 
 function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
   if (typeof raw !== 'string') return '';
@@ -216,6 +216,31 @@ export function getApiConfigByPreset_ACU(presetName: string) {
 }
 
 
+/**
+ * 构造酒馆 ConnectionManager 请求的参数覆盖载荷（overridePayload）
+ * 仅当配置了相应字段时才加入覆盖，避免意外覆盖 Profile 原有默认值。
+ */
+export function buildConnectionManagerOverrides_ACU(config?: Partial<ApiPresetApiConfig_ACU>): Record<string, any> {
+    const overrides: Record<string, any> = {};
+    if (!config) return overrides;
+
+    if (config.model && typeof config.model === 'string' && config.model.trim()) {
+        overrides.model = config.model.trim();
+    }
+    if (typeof config.temperature === 'number' && Number.isFinite(config.temperature)) {
+        overrides.temperature = config.temperature;
+    }
+    const rawPostProc = String(config.postProcessing ?? (config as any).custom_prompt_post_processing ?? '').trim().toLowerCase();
+    if (rawPostProc && rawPostProc !== 'default') {
+        overrides.custom_prompt_post_processing = rawPostProc === 'none' ? '' : rawPostProc;
+    }
+    const rawReasoning = typeof config.reasoning_effort === 'string' ? config.reasoning_effort.trim().toLowerCase() : '';
+    if (rawReasoning && rawReasoning !== 'default') {
+        overrides.reasoning_effort = rawReasoning;
+    }
+    return overrides;
+}
+
 export async function callCustomOpenAI_ACU_Direct(messages: any[]) {
       // Reuse the logic from callCustomOpenAI_ACU but bypass the prompt replacement part
       // ... For brevity, I will just call callCustomOpenAI_ACU with a hacked dynamicContent?
@@ -225,9 +250,14 @@ export async function callCustomOpenAI_ACU_Direct(messages: any[]) {
       // Duplicating API calling logic for safety and isolation
       if (settings_ACU.apiMode === 'tavern') {
           const profileId = settings_ACU.tavernProfile;
+          const overrides = buildConnectionManagerOverrides_ACU(settings_ACU.apiConfig);
           return await sendConnectionManagerRequest_ACU(
-                profileId, messages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096
-          ).then(r => r.result.choices[0].message.content);
+                profileId,
+                messages,
+                settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096,
+                { stream: false, extractData: true },
+                overrides,
+          ).then(r => r?.result?.choices?.[0]?.message?.content ?? (typeof r === 'string' ? r : r?.content));
       } else {
           // Custom API（流式传输）
           if (settings_ACU.apiConfig.useMainApi) {
@@ -268,7 +298,14 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
 
     if (effectiveApiMode === 'tavern') {
         const profileId = effectiveTavernProfile || settings_ACU.tavernProfile;
-        const response = await sendConnectionManagerRequest_ACU(profileId, messages, maxTokens);
+        const overrides = buildConnectionManagerOverrides_ACU(effectiveApiConfig);
+        const response = await sendConnectionManagerRequest_ACU(
+            profileId,
+            messages,
+            maxTokens,
+            { stream: false, extractData: true },
+            overrides,
+        );
         assertNotAborted_ACU(signal);
         if (response?.result?.choices?.[0]?.message?.content) {
             return response.result.choices[0].message.content;

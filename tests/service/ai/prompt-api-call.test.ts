@@ -86,6 +86,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
 vi.mock('../../../src/service/ai/api-call', () => ({
   getApiConfigByPreset_ACU: mockGetApiConfigByPreset,
   buildCustomApiRequestBody_ACU: mockBuildCustomBody,
+  buildConnectionManagerOverrides_ACU: vi.fn(() => ({})),
 }));
 
 vi.mock('../../../src/data/gateways/host-state-gateway', () => ({
@@ -558,7 +559,7 @@ describe('callCustomOpenAI_ACU — tavern 模式', () => {
     });
     const result = await callCustomOpenAI_ACU({});
     expect(result).toBe('酒馆回复');
-    expect(mockSendConnectionManagerRequest).toHaveBeenCalledWith('profile-1', expect.any(Array), 4096);
+    expect(mockSendConnectionManagerRequest).toHaveBeenCalledWith('profile-1', expect.any(Array), 4096, { stream: false, extractData: true }, expect.any(Object));
   });
 
   it('max_tokens=0 透传给 sendConnectionManagerRequest_ACU', async () => {
@@ -577,7 +578,7 @@ describe('callCustomOpenAI_ACU — tavern 模式', () => {
     });
     const result = await callCustomOpenAI_ACU({});
     expect(result).toBe('酒馆回复');
-    expect(mockSendConnectionManagerRequest).toHaveBeenCalledWith('profile-1', expect.any(Array), 0);
+    expect(mockSendConnectionManagerRequest).toHaveBeenCalledWith('profile-1', expect.any(Array), 0, { stream: false, extractData: true }, expect.any(Object));
   });
 });
 

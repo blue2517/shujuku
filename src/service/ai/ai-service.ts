@@ -89,3 +89,97 @@ export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string): 
 
     return { success: true, models: modelNames };
 }
+
+/**
+ * 通过酒馆连接管理器 Profile 拉取该配置可用的模型列表
+ * 复用酒馆内部已保存的凭证（secret-id）、反代、自定义端点配置
+ */
+export async function fetchModelsForProfile_ACU(profileId: string): Promise<FetchModelsResult> {
+    if (!profileId || typeof profileId !== 'string') {
+        return { success: false, error: '请先选择一个酒馆连接预设。' };
+    }
+
+    try {
+        const globalScope: any = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+        const hostWin: any = globalScope?.parent || globalScope;
+        const ctx = globalScope?.SillyTavern?.getContext?.() || hostWin?.SillyTavern?.getContext?.();
+
+        const profiles: any[] = ctx?.extensionSettings?.connectionManager?.profiles
+            ?? (globalScope as any)?.extension_settings?.connectionManager?.profiles
+            ?? hostWin?.extension_settings?.connectionManager?.profiles
+            ?? [];
+
+        const profile = profiles.find((p: any) => p && String(p.id) === String(profileId));
+        if (!profile) {
+            return { success: false, error: '未找到所选酒馆连接预设。' };
+        }
+
+        const connectApiMap = ctx?.CONNECT_API_MAP ?? hostWin?.CONNECT_API_MAP;
+        const apiMap = connectApiMap?.[profile.api];
+        const source = apiMap?.source || (typeof profile.api === 'string' ? profile.api : '');
+
+        if (!source) {
+            return { success: false, error: '未能识别该连接预设的 API 类型。' };
+        }
+        if (apiMap && apiMap.selected !== 'openai') {
+            return { success: false, error: '该连接预设类型暂不支持拉取模型列表（仅支持 Chat Completion 类接口）。' };
+        }
+
+        const proxies = ctx?.extensionSettings?.connectionManager?.proxies
+            ?? (globalScope as any)?.extension_settings?.connectionManager?.proxies
+            ?? hostWin?.extension_settings?.connectionManager?.proxies
+            ?? [];
+        const proxyPreset = Array.isArray(proxies) ? proxies.find((p: any) => p && p.name === profile.proxy) : undefined;
+
+        const body: Record<string, any> = {
+            chat_completion_source: source,
+            secret_id: profile['secret-id'] || '',
+            reverse_proxy: proxyPreset?.url || '',
+            proxy_password: proxyPreset?.password || '',
+            custom_url: profile['api-url'] || '',
+        };
+
+        const response = await fetch('/api/backends/chat-completions/status', {
+            method: 'POST',
+            headers: { ..._getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            let errorMessage = `获取模型列表失败: HTTP ${response.status} ${response.statusText}.`;
+            try {
+                const errorJson = JSON.parse(errorText);
+                errorMessage += ` 详情: ${errorJson.error || errorJson.message || errorText}`;
+            } catch {
+                errorMessage += ` 详情: ${errorText}`;
+            }
+            return { success: false, error: errorMessage };
+        }
+
+        const data = await response.json();
+        logDebug_ACU('通过连接预设获取到的模型数据:', data);
+
+        let modelsList: any[] = [];
+        if (data && data.models && Array.isArray(data.models)) {
+            modelsList = data.models;
+        } else if (data && data.data && Array.isArray(data.data)) {
+            modelsList = data.data;
+        } else if (Array.isArray(data)) {
+            modelsList = data;
+        }
+
+        const modelNames = modelsList
+            .map((model: any) => (typeof model === 'string' ? model : (model?.id || model?.model)))
+            .filter(Boolean)
+            .sort();
+
+        if (modelNames.length === 0) {
+            return { success: false, error: '未能解析模型数据或返回的模型列表为空。' };
+        }
+
+        return { success: true, models: modelNames };
+    } catch (e: any) {
+        return { success: false, error: `拉取模型失败: ${e?.message || String(e)}` };
+    }
+}

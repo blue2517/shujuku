@@ -64470,14 +64470,16 @@ $CONTENT
      * @param profileId 配置文件 ID
      * @param messages 消息数组
      * @param maxTokens 最大 token 数
+     * @param options 请求选项（流式、提取数据等）
+     * @param overridePayload 覆盖参数（model, temperature 等）
      * @returns API 响应结果
      * @throws 如果 ConnectionManagerRequestService 不可用
      */
-    async function sendConnectionManagerRequest_ACU(profileId, messages, maxTokens) {
+    async function sendConnectionManagerRequest_ACU(profileId, messages, maxTokens, options = { stream: false, extractData: true }, overridePayload = {}) {
         if (!isConnectionManagerAvailable_ACU()) {
             throw new Error('ConnectionManagerRequestService 不可用。请检查酒馆版本或连接管理器配置。');
         }
-        return await SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest(profileId, messages, maxTokens);
+        return await SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest(profileId, messages, maxTokens, options, overridePayload);
     }
     /**
      * 触发斜杠命令
@@ -64497,7 +64499,19 @@ $CONTENT
      * @returns 配置文件数组，不可用时返回 []
      */
     function getConnectionManagerProfiles_ACU() {
-        return SillyTavern_API_ACU?.extensionSettings?.connectionManager?.profiles || [];
+        const fromApi = SillyTavern_API_ACU?.extensionSettings?.connectionManager?.profiles;
+        if (Array.isArray(fromApi))
+            return fromApi;
+        const ctx = globalThis.SillyTavern?.getContext?.();
+        const fromCtx = ctx?.extensionSettings?.connectionManager?.profiles;
+        if (Array.isArray(fromCtx))
+            return fromCtx;
+        const hostWin = globalThis.parent || globalThis;
+        const fromExt = globalThis.extension_settings?.connectionManager?.profiles
+            ?? hostWin?.extension_settings?.connectionManager?.profiles;
+        if (Array.isArray(fromExt))
+            return fromExt;
+        return [];
     }
     // ═══ 请求认证 ═══
     /**
@@ -64721,10 +64735,7 @@ $CONTENT
                         throw new Error(`无法找到ID为 "${profileId}" 的连接预设。`);
                     }
                     if (!targetProfile.api) {
-                        throw new Error(`预设 "${targetProfile.name || targetProfile.id}" 没有配置API。`);
-                    }
-                    if (!targetProfile.preset) {
-                        throw new Error(`预设 "${targetProfile.name || targetProfile.id}" 没有选择预设。`);
+                        throw new Error(`连接预设 "${targetProfile.name || targetProfile.id}" 没有配置API。`);
                     }
                     const targetProfileName = targetProfile.name || targetProfile.id;
                     if (!skipProfileSwitch) {
@@ -64735,7 +64746,8 @@ $CONTENT
                         }
                     }
                     logDebug_ACU(`ACU: 通过酒馆连接预设 (ID: ${profileId}, Name: ${targetProfileName}) 发送请求...`);
-                    responsePromise = sendConnectionManagerRequest_ACU(profileId, messages, effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096);
+                    const overrides = buildConnectionManagerOverrides_ACU(effectiveApiConfig);
+                    responsePromise = sendConnectionManagerRequest_ACU(profileId, messages, effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096, { stream: false, extractData: true }, overrides);
                     rawResult = await responsePromise;
                 }
                 catch (error) {
@@ -65545,6 +65557,30 @@ $CONTENT
             tavernProfile: resolved.tavernProfile,
         };
     }
+    /**
+     * 构造酒馆 ConnectionManager 请求的参数覆盖载荷（overridePayload）
+     * 仅当配置了相应字段时才加入覆盖，避免意外覆盖 Profile 原有默认值。
+     */
+    function buildConnectionManagerOverrides_ACU(config) {
+        const overrides = {};
+        if (!config)
+            return overrides;
+        if (config.model && typeof config.model === 'string' && config.model.trim()) {
+            overrides.model = config.model.trim();
+        }
+        if (typeof config.temperature === 'number' && Number.isFinite(config.temperature)) {
+            overrides.temperature = config.temperature;
+        }
+        const rawPostProc = String(config.postProcessing ?? config.custom_prompt_post_processing ?? '').trim().toLowerCase();
+        if (rawPostProc && rawPostProc !== 'default') {
+            overrides.custom_prompt_post_processing = rawPostProc === 'none' ? '' : rawPostProc;
+        }
+        const rawReasoning = typeof config.reasoning_effort === 'string' ? config.reasoning_effort.trim().toLowerCase() : '';
+        if (rawReasoning && rawReasoning !== 'default') {
+            overrides.reasoning_effort = rawReasoning;
+        }
+        return overrides;
+    }
     async function callCustomOpenAI_ACU_Direct(messages) {
         // Reuse the logic from callCustomOpenAI_ACU but bypass the prompt replacement part
         // ... For brevity, I will just call callCustomOpenAI_ACU with a hacked dynamicContent?
@@ -65553,7 +65589,8 @@ $CONTENT
         // Duplicating API calling logic for safety and isolation
         if (settings_ACU.apiMode === 'tavern') {
             const profileId = settings_ACU.tavernProfile;
-            return await sendConnectionManagerRequest_ACU(profileId, messages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096).then(r => r.result.choices[0].message.content);
+            const overrides = buildConnectionManagerOverrides_ACU(settings_ACU.apiConfig);
+            return await sendConnectionManagerRequest_ACU(profileId, messages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096, { stream: false, extractData: true }, overrides).then(r => r?.result?.choices?.[0]?.message?.content ?? (typeof r === 'string' ? r : r?.content));
         }
         else {
             // Custom API（流式传输）
@@ -65590,7 +65627,8 @@ $CONTENT
         logDebug_ACU(`[callAIWithPreset] 调用 AI，消息数=${messages.length}，预设=${presetName || '当前配置'}，模式=${effectiveApiMode}`);
         if (effectiveApiMode === 'tavern') {
             const profileId = effectiveTavernProfile || settings_ACU.tavernProfile;
-            const response = await sendConnectionManagerRequest_ACU(profileId, messages, maxTokens);
+            const overrides = buildConnectionManagerOverrides_ACU(effectiveApiConfig);
+            const response = await sendConnectionManagerRequest_ACU(profileId, messages, maxTokens, { stream: false, extractData: true }, overrides);
             assertNotAborted_ACU(signal);
             if (response?.result?.choices?.[0]?.message?.content) {
                 return response.result.choices[0].message.content;
@@ -86398,11 +86436,17 @@ $CONTENT
                 }
                 const finalMessages = messagesToUse.map((m) => ({ role: m.role.toLowerCase(), content: m.content }));
                 if (settings_ACU.apiMode === 'tavern') {
-                    const result = await sendConnectionManagerRequest_ACU(settings_ACU.tavernProfile, finalMessages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096);
-                    if (result && result.ok)
+                    const overrides = buildConnectionManagerOverrides_ACU(settings_ACU.apiConfig);
+                    const result = await sendConnectionManagerRequest_ACU(settings_ACU.tavernProfile, finalMessages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096, { stream: false, extractData: true }, overrides);
+                    if (result && result.ok && result.result?.choices?.[0]?.message?.content) {
                         aiResponseText = result.result.choices[0].message.content;
-                    else
+                    }
+                    else if (result && typeof result.content === 'string') {
+                        aiResponseText = result.content;
+                    }
+                    else {
                         throw new Error('API请求返回不成功状态');
+                    }
                 }
                 else {
                     if (settings_ACU.apiConfig.useMainApi) {
@@ -88946,6 +88990,89 @@ $CONTENT
             return { success: false, error: '未能解析模型数据或列表为空。' };
         }
         return { success: true, models: modelNames };
+    }
+    /**
+     * 通过酒馆连接管理器 Profile 拉取该配置可用的模型列表
+     * 复用酒馆内部已保存的凭证（secret-id）、反代、自定义端点配置
+     */
+    async function fetchModelsForProfile_ACU(profileId) {
+        if (!profileId || typeof profileId !== 'string') {
+            return { success: false, error: '请先选择一个酒馆连接预设。' };
+        }
+        try {
+            const globalScope = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+            const hostWin = globalScope?.parent || globalScope;
+            const ctx = globalScope?.SillyTavern?.getContext?.() || hostWin?.SillyTavern?.getContext?.();
+            const profiles = ctx?.extensionSettings?.connectionManager?.profiles
+                ?? globalScope?.extension_settings?.connectionManager?.profiles
+                ?? hostWin?.extension_settings?.connectionManager?.profiles
+                ?? [];
+            const profile = profiles.find((p) => p && String(p.id) === String(profileId));
+            if (!profile) {
+                return { success: false, error: '未找到所选酒馆连接预设。' };
+            }
+            const connectApiMap = ctx?.CONNECT_API_MAP ?? hostWin?.CONNECT_API_MAP;
+            const apiMap = connectApiMap?.[profile.api];
+            const source = apiMap?.source || (typeof profile.api === 'string' ? profile.api : '');
+            if (!source) {
+                return { success: false, error: '未能识别该连接预设的 API 类型。' };
+            }
+            if (apiMap && apiMap.selected !== 'openai') {
+                return { success: false, error: '该连接预设类型暂不支持拉取模型列表（仅支持 Chat Completion 类接口）。' };
+            }
+            const proxies = ctx?.extensionSettings?.connectionManager?.proxies
+                ?? globalScope?.extension_settings?.connectionManager?.proxies
+                ?? hostWin?.extension_settings?.connectionManager?.proxies
+                ?? [];
+            const proxyPreset = Array.isArray(proxies) ? proxies.find((p) => p && p.name === profile.proxy) : undefined;
+            const body = {
+                chat_completion_source: source,
+                secret_id: profile['secret-id'] || '',
+                reverse_proxy: proxyPreset?.url || '',
+                proxy_password: proxyPreset?.password || '',
+                custom_url: profile['api-url'] || '',
+            };
+            const response = await fetch('/api/backends/chat-completions/status', {
+                method: 'POST',
+                headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                let errorMessage = `获取模型列表失败: HTTP ${response.status} ${response.statusText}.`;
+                try {
+                    const errorJson = JSON.parse(errorText);
+                    errorMessage += ` 详情: ${errorJson.error || errorJson.message || errorText}`;
+                }
+                catch {
+                    errorMessage += ` 详情: ${errorText}`;
+                }
+                return { success: false, error: errorMessage };
+            }
+            const data = await response.json();
+            logDebug_ACU('通过连接预设获取到的模型数据:', data);
+            let modelsList = [];
+            if (data && data.models && Array.isArray(data.models)) {
+                modelsList = data.models;
+            }
+            else if (data && data.data && Array.isArray(data.data)) {
+                modelsList = data.data;
+            }
+            else if (Array.isArray(data)) {
+                modelsList = data;
+            }
+            const modelNames = modelsList
+                .map((model) => (typeof model === 'string' ? model : (model?.id || model?.model)))
+                .filter(Boolean)
+                .sort();
+            if (modelNames.length === 0) {
+                return { success: false, error: '未能解析模型数据或返回的模型列表为空。' };
+            }
+            return { success: true, models: modelNames };
+        }
+        catch (e) {
+            return { success: false, error: `拉取模型失败: ${e?.message || String(e)}` };
+        }
     }
 
     /**
@@ -129339,9 +129466,14 @@ Expected function or array of functions, received type ${typeof value}.`
             ? settings_ACU.tavernProfile.trim()
             : '';
         if (mode === 'tavern') {
-            return tavernProfile
-                ? { ready: true, label: `酒馆连接预设 ${tavernProfile}` }
-                : { ready: false, label: '未选择酒馆连接预设' };
+            if (!tavernProfile) {
+                return { ready: false, label: '未选择酒馆连接预设' };
+            }
+            const model = config.model?.trim();
+            return {
+                ready: true,
+                label: model ? `酒馆连接预设 ${tavernProfile} (${model})` : `酒馆连接预设 ${tavernProfile}`,
+            };
         }
         if (config.useMainApi) {
             return { ready: true, label: '酒馆主 API' };
@@ -129444,6 +129576,25 @@ Expected function or array of functions, received type ${typeof value}.`
                 this.modelOptions = result.models || [];
                 this.modelLoadStatus = 'success';
                 return true;
+            },
+            async loadModelsForProfile(profileId) {
+                this.modelLoadStatus = 'loading';
+                this.modelLoadError = '';
+                const result = await fetchModelsForProfile_ACU(profileId);
+                if (!result.success) {
+                    this.modelOptions = [];
+                    this.modelLoadStatus = 'error';
+                    this.modelLoadError = result.error || '模型列表加载失败';
+                    return false;
+                }
+                this.modelOptions = result.models || [];
+                this.modelLoadStatus = 'success';
+                return true;
+            },
+            clearModelOptions() {
+                this.modelOptions = [];
+                this.modelLoadStatus = 'idle';
+                this.modelLoadError = '';
             },
         },
     });
@@ -130371,11 +130522,18 @@ Expected function or array of functions, received type ${typeof value}.`
                 store.deletePreset(name);
             }
             function presetMeta(preset) {
-                if (preset.apiMode === "tavern")
-                    return "酒馆预设";
+                if (preset.apiMode === "tavern") {
+                    const profile = store.tavernProfiles.find((p) => p.id === preset.tavernProfile);
+                    const profileLabel = profile?.name || preset.tavernProfile || "酒馆预设";
+                    return preset.apiConfig.model ? `${profileLabel} (${preset.apiConfig.model})` : profileLabel;
+                }
                 return preset.apiConfig.useMainApi
                     ? "酒馆主 API"
                     : preset.apiConfig.model || "自定义";
+            }
+            function onTavernProfileChange(profileId) {
+                activeDraft.tavernProfile = profileId;
+                store.clearModelOptions();
             }
             function validateActiveDraft() {
                 if (!activeDraft.name.trim()) {
@@ -130422,23 +130580,33 @@ Expected function or array of functions, received type ${typeof value}.`
             }
             function setActiveConnectionMode(value) {
                 applyConnectionMode(activeDraft, value);
+                store.clearModelOptions();
                 activeDraftSavedAt.value = null;
             }
             async function loadModelsForActive() {
-                await store.loadModelsForConfig({
-                    url: activeDraft.url,
-                    apiKey: activeDraft.apiKey,
-                });
+                if (activeConnectionMode.value === "tavern") {
+                    if (!activeDraft.tavernProfile) {
+                        toast.warning("请先选择酒馆连接预设。");
+                        return;
+                    }
+                    await store.loadModelsForProfile(activeDraft.tavernProfile);
+                }
+                else {
+                    await store.loadModelsForConfig({
+                        url: activeDraft.url,
+                        apiKey: activeDraft.apiKey,
+                    });
+                }
             }
             watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
-            const __returned__ = { store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeConnectionMode, activeDraftDirty, connectionModeOptions, postProcessingOptions, reasoningEffortOptions, modelSelectOptions, tavernProfileOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, setActiveConnectionMode, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSegmentedControl, AcuSelect };
+            const __returned__ = { store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeConnectionMode, activeDraftDirty, connectionModeOptions, postProcessingOptions, reasoningEffortOptions, modelSelectOptions, tavernProfileOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, onTavernProfileChange, validateActiveDraft, saveActiveDraft, setActiveConnectionMode, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSegmentedControl, AcuSelect };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-1af1dc3a] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-1af1dc3a] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-1af1dc3a] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-1af1dc3a] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-1af1dc3a] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-1af1dc3a] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-1af1dc3a] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-1af1dc3a] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-1af1dc3a");
-    var ApiConfigPanel_vue_vue_type_style_index_0_scoped_1af1dc3a_lang = null;
+    injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-c5ac9de0] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-c5ac9de0] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-c5ac9de0] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-c5ac9de0] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-c5ac9de0] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-c5ac9de0] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-c5ac9de0] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-c5ac9de0] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-c5ac9de0");
+    var ApiConfigPanel_vue_vue_type_style_index_0_scoped_c5ac9de0_lang = null;
 
     const _hoisted_1$R = { class: "acu-api-config-panel__select-row" };
     const _hoisted_2$K = { class: "acu-api-config-panel__editor-section" };
@@ -130452,15 +130620,24 @@ Expected function or array of functions, received type ${typeof value}.`
 	class: "acu-api-config-panel__danger"
     };
     const _hoisted_6$o = { class: "acu-api-config-panel__inline-action" };
-    const _hoisted_7$l = {
+    const _hoisted_7$l = { class: "acu-api-config-panel__inline-action" };
+    const _hoisted_8$k = {
+	key: 0,
+	class: "acu-api-config-panel__muted"
+    };
+    const _hoisted_9$g = {
+	key: 1,
+	class: "acu-api-config-panel__danger"
+    };
+    const _hoisted_10$f = {
 	key: 0,
 	class: "acu-api-config-panel__two-col"
     };
-    const _hoisted_8$k = {
+    const _hoisted_11$e = {
 	key: 1,
 	class: "acu-api-config-panel__editor-section"
     };
-    const _hoisted_9$g = { class: "acu-api-config-panel__actions" };
+    const _hoisted_12$a = { class: "acu-api-config-panel__actions" };
     function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuPanel"], {
 		title: $setup.apiCopy.panels.preset.title,
@@ -130471,7 +130648,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+				default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -130570,7 +130747,7 @@ Expected function or array of functions, received type ${typeof value}.`
 									_: 1
 								}),
 								createBaseVNode("div", _hoisted_3$C, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-									default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+									default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 										"加载模型",
 										-1
 										/* CACHED */
@@ -130602,30 +130779,71 @@ Expected function or array of functions, received type ${typeof value}.`
 						$setup.activeConnectionMode === "tavern" ? (openBlock(), createElementBlock(
 							Fragment,
 							{ key: 1 },
-							[createVNode($setup["AcuFormRow"], { label: "酒馆连接预设" }, {
-								default: withCtx(() => [createVNode($setup["AcuSelect"], {
-									options: $setup.tavernProfileOptions,
-									"model-value": $setup.activeDraft.tavernProfile,
-									placeholder: "请选择",
-									"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.activeDraft.tavernProfile = $event)
-								}, null, 8, ["options", "model-value"])]),
-								_: 1
-							}), createBaseVNode("div", _hoisted_6$o, [createVNode($setup["AcuButton"], { onClick: $setup.store.refreshTavernProfiles }, {
-								default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
-									"刷新列表",
-									-1
-									/* CACHED */
-								)])]),
-								_: 1
-							}, 8, ["onClick"])])],
+							[
+								createVNode($setup["AcuFormRow"], { label: "酒馆连接预设" }, {
+									default: withCtx(() => [createVNode($setup["AcuSelect"], {
+										options: $setup.tavernProfileOptions,
+										"model-value": $setup.activeDraft.tavernProfile,
+										placeholder: "请选择",
+										"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.onTavernProfileChange($event))
+									}, null, 8, ["options", "model-value"])]),
+									_: 1
+								}),
+								createBaseVNode("div", _hoisted_6$o, [createVNode($setup["AcuButton"], { onClick: $setup.store.refreshTavernProfiles }, {
+									default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+										"刷新列表",
+										-1
+										/* CACHED */
+									)])]),
+									_: 1
+								}, 8, ["onClick"])]),
+								createVNode($setup["AcuFormRow"], {
+									label: "模型名",
+									hint: "留空则使用该连接预设在酒馆中配置的默认模型。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.activeDraft.model,
+										"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.model = $event),
+										type: "text",
+										placeholder: "留空 = 使用预设默认模型"
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createBaseVNode("div", _hoisted_7$l, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
+									default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+										"加载模型",
+										-1
+										/* CACHED */
+									)])]),
+									_: 1
+								}), $setup.store.modelLoadStatus === "loading" ? (openBlock(), createElementBlock("span", _hoisted_8$k, "加载中...")) : $setup.store.modelLoadStatus === "error" ? (openBlock(), createElementBlock(
+									"span",
+									_hoisted_9$g,
+									toDisplayString($setup.store.modelLoadError),
+									1
+									/* TEXT */
+								)) : createCommentVNode("v-if", true)]),
+								$setup.store.modelOptions.length ? (openBlock(), createBlock($setup["AcuFormRow"], {
+									key: 0,
+									label: "模型列表"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuSelect"], {
+										options: $setup.modelSelectOptions,
+										"model-value": $setup.activeDraft.model,
+										placeholder: "请选择",
+										"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.model = $event)
+									}, null, 8, ["options", "model-value"])]),
+									_: 1
+								})) : createCommentVNode("v-if", true)
+							],
 							64
 							/* STABLE_FRAGMENT */
 						)) : createCommentVNode("v-if", true)
 					]),
-					$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock("div", _hoisted_7$l, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
+					$setup.activeConnectionMode === "custom" || $setup.activeConnectionMode === "tavern" ? (openBlock(), createElementBlock("div", _hoisted_10$f, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							modelValue: $setup.activeDraft.max_tokens,
-							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.max_tokens = $event),
+							"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.max_tokens = $event),
 							type: "number",
 							min: 1,
 							step: 1
@@ -130634,7 +130852,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					}), createVNode($setup["AcuFormRow"], { label: "温度" }, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							modelValue: $setup.activeDraft.temperature,
-							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.temperature = $event),
+							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.temperature = $event),
 							type: "number",
 							min: 0,
 							max: 2,
@@ -130642,7 +130860,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					})])) : createCommentVNode("v-if", true),
-					$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock("div", _hoisted_8$k, [
+					$setup.activeConnectionMode === "custom" || $setup.activeConnectionMode === "tavern" ? (openBlock(), createElementBlock("div", _hoisted_11$e, [
 						createVNode($setup["AcuFormRow"], {
 							label: "提示词后处理",
 							hint: "控制发送给后端时是否强制改写消息角色。设为 none 可保留全部中间 SYSTEM 提示词段落。"
@@ -130650,7 +130868,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							default: withCtx(() => [createVNode($setup["AcuSelect"], {
 								options: $setup.postProcessingOptions,
 								"model-value": $setup.activeDraft.postProcessing || "none",
-								"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.postProcessing = $event)
+								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.postProcessing = $event)
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -130661,46 +130879,54 @@ Expected function or array of functions, received type ${typeof value}.`
 							default: withCtx(() => [createVNode($setup["AcuSelect"], {
 								options: $setup.reasoningEffortOptions,
 								"model-value": $setup.activeDraft.reasoning_effort || "default",
-								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.reasoning_effort = $event)
+								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.reasoning_effort = $event)
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
-						createVNode($setup["AcuFormRow"], {
-							label: "附加主体参数",
-							hint: "SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。"
-						}, {
-							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
-								modelValue: $setup.activeDraft.bodyParams,
-								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.bodyParams = $event),
-								rows: 3,
-								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], {
-							label: "排除主体参数",
-							hint: "会转换为 SillyTavern custom_exclude_body，从最终模型请求体删除指定字段。"
-						}, {
-							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
-								modelValue: $setup.activeDraft.excludeBodyParams,
-								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
-								rows: 2,
-								placeholder: "top_p, reasoning_effort"
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], {
-							label: "附加请求标头",
-							hint: "每行一个 Header: Value，追加到请求头中。"
-						}, {
-							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
-								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.requestHeaders = $event),
-								rows: 2,
-								placeholder: "X-Custom-Header: value"
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						})
+						$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock(
+							Fragment,
+							{ key: 0 },
+							[
+								createVNode($setup["AcuFormRow"], {
+									label: "附加主体参数",
+									hint: "SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+										modelValue: $setup.activeDraft.bodyParams,
+										"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.bodyParams = $event),
+										rows: 3,
+										placeholder: "response_format:\n  type: json_object\ntop_k: 50"
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "排除主体参数",
+									hint: "会转换为 SillyTavern custom_exclude_body，从最终模型请求体删除指定字段。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+										modelValue: $setup.activeDraft.excludeBodyParams,
+										"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+										rows: 2,
+										placeholder: "top_p, reasoning_effort"
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "附加请求标头",
+									hint: "每行一个 Header: Value，追加到请求头中。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+										modelValue: $setup.activeDraft.requestHeaders,
+										"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.activeDraft.requestHeaders = $event),
+										rows: 2,
+										placeholder: "X-Custom-Header: value"
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								})
+							],
+							64
+							/* STABLE_FRAGMENT */
+						)) : createCommentVNode("v-if", true)
 					])) : createCommentVNode("v-if", true),
 					$setup.activeDraftError ? (openBlock(), createBlock($setup["AcuMessage"], {
 						key: 2,
@@ -130713,11 +130939,11 @@ Expected function or array of functions, received type ${typeof value}.`
 						)]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
-					createBaseVNode("div", _hoisted_9$g, [createVNode($setup["AcuButton"], {
+					createBaseVNode("div", _hoisted_12$a, [createVNode($setup["AcuButton"], {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -130742,7 +130968,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+				default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -130753,7 +130979,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		_: 1
 	}, 8, ["title", "description"]);
     }
-    var ApiConfigPanel = /*#__PURE__*/ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-1af1dc3a"]]);
+    var ApiConfigPanel = /*#__PURE__*/ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-c5ac9de0"]]);
 
     // ═══════════════════════════════════════════════════════════
     // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用

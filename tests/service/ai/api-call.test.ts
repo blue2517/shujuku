@@ -51,6 +51,7 @@ import {
   callAIWithPreset_ACU,
   callCustomOpenAI_ACU_Direct,
   buildCustomApiRequestBody_ACU,
+  buildConnectionManagerOverrides_ACU,
 } from '../../../src/service/ai/api-call';
 
 beforeEach(() => {
@@ -246,6 +247,8 @@ describe('callCustomOpenAI_ACU_Direct', () => {
       expect.any(String),
       expect.any(Array),
       0,
+      { stream: false, extractData: true },
+      expect.any(Object),
     );
   });
   it('custom 模式且 useMainApi 时使用 generateRaw', async () => {
@@ -580,5 +583,69 @@ describe('callAIWithPreset_ACU 参数透传', () => {
     await callAIWithPreset_ACU([{ role: 'user', content: '你好' }]);
     const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(fetchBody.max_tokens).toBe(0);
+  });
+});
+
+// ═══ buildConnectionManagerOverrides_ACU ═══
+describe('buildConnectionManagerOverrides_ACU', () => {
+  it('配置为空或 undefined 时返回空对象', () => {
+    expect(buildConnectionManagerOverrides_ACU(undefined)).toEqual({});
+    expect(buildConnectionManagerOverrides_ACU({})).toEqual({});
+  });
+
+  it('提取 model、temperature、postProcessing、reasoning_effort 覆盖字段', () => {
+    const overrides = buildConnectionManagerOverrides_ACU({
+      model: ' gemini-2.5-pro ',
+      temperature: 0.7,
+      postProcessing: 'none',
+      reasoning_effort: 'high',
+    });
+    expect(overrides).toEqual({
+      model: 'gemini-2.5-pro',
+      temperature: 0.7,
+      custom_prompt_post_processing: '',
+      reasoning_effort: 'high',
+    });
+  });
+
+  it('postProcessing 为 default 时不注入覆盖', () => {
+    const overrides = buildConnectionManagerOverrides_ACU({
+      postProcessing: 'default',
+    });
+    expect(overrides).not.toHaveProperty('custom_prompt_post_processing');
+  });
+
+  it('reasoning_effort 为 default 时不注入覆盖', () => {
+    const overrides = buildConnectionManagerOverrides_ACU({
+      reasoning_effort: 'default',
+    });
+    expect(overrides).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('tavern 模式 callAIWithPreset_ACU 透传 overrides', async () => {
+    mockSettings.apiPresets = [
+      {
+        name: '酒馆预设A',
+        apiMode: 'tavern',
+        tavernProfile: 'prof-1',
+        apiConfig: { model: 'claude-3-5', temperature: 0.8 },
+      },
+    ];
+    mockSendConnectionManager.mockResolvedValue({
+      result: { choices: [{ message: { content: 'tavern response' } }] },
+    });
+
+    const res = await callAIWithPreset_ACU([{ role: 'user', content: 'hi' }], '酒馆预设A');
+    expect(res).toBe('tavern response');
+    expect(mockSendConnectionManager).toHaveBeenCalledWith(
+      'prof-1',
+      expect.any(Array),
+      expect.any(Number),
+      { stream: false, extractData: true },
+      expect.objectContaining({
+        model: 'claude-3-5',
+        temperature: 0.8,
+      }),
+    );
   });
 });

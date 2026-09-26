@@ -26,7 +26,7 @@ import {
   type ApiPresetBinding_ACU,
   type ApiPresetWriteResult_ACU,
 } from '../../service/settings/api-preset-service';
-import { fetchAvailableModels_ACU, getConnectionManagerProfiles_ACU } from '../../service/ai/ai-service';
+import { fetchAvailableModels_ACU, fetchModelsForProfile_ACU, getConnectionManagerProfiles_ACU } from '../../service/ai/ai-service';
 
 export type AcuV2ApiMode = ApiPresetApiMode_ACU;
 
@@ -93,9 +93,14 @@ function resolveCurrentConfigStatus(): { ready: boolean; label: string } {
     : '';
 
   if (mode === 'tavern') {
-    return tavernProfile
-      ? { ready: true, label: `酒馆连接预设 ${tavernProfile}` }
-      : { ready: false, label: '未选择酒馆连接预设' };
+    if (!tavernProfile) {
+      return { ready: false, label: '未选择酒馆连接预设' };
+    }
+    const model = config.model?.trim();
+    return {
+      ready: true,
+      label: model ? `酒馆连接预设 ${tavernProfile} (${model})` : `酒馆连接预设 ${tavernProfile}`,
+    };
   }
 
   if (config.useMainApi) {
@@ -202,6 +207,25 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
       this.modelOptions = result.models || [];
       this.modelLoadStatus = 'success';
       return true;
+    },
+    async loadModelsForProfile(profileId: string): Promise<boolean> {
+      this.modelLoadStatus = 'loading';
+      this.modelLoadError = '';
+      const result = await fetchModelsForProfile_ACU(profileId);
+      if (!result.success) {
+        this.modelOptions = [];
+        this.modelLoadStatus = 'error';
+        this.modelLoadError = result.error || '模型列表加载失败';
+        return false;
+      }
+      this.modelOptions = result.models || [];
+      this.modelLoadStatus = 'success';
+      return true;
+    },
+    clearModelOptions(): void {
+      this.modelOptions = [];
+      this.modelLoadStatus = 'idle';
+      this.modelLoadError = '';
     },
   },
 });

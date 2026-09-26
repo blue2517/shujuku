@@ -47,6 +47,7 @@ async function importStore(settings: any, chatKey = 'chat-A') {
   vi.doMock('../../../src/service/ai/ai-service', () => ({
     getConnectionManagerProfiles_ACU: () => [{ id: 'profile-beta', name: 'Beta Profile' }],
     fetchAvailableModels_ACU: vi.fn(async () => ({ success: true, models: ['m1', 'm2'] })),
+    fetchModelsForProfile_ACU: vi.fn(async (id: string) => (id === 'profile-beta' ? { success: true, models: ['tm1', 'tm2'] } : { success: false, error: 'not found' })),
   }));
   const [{ setActivePinia, createPinia }, { useApiPresetStore }] = await Promise.all([
     import('pinia'),
@@ -215,5 +216,31 @@ describe('useApiPresetStore', () => {
     expect(settings.apiConfig.url).toBe('');
     expect(settings.apiConfig.useMainApi).toBe(true);
     expect(settings.apiConfig.max_tokens).toBe(60000);
+  });
+
+  it('loadModelsForProfile 成功拉取模型并更新 modelOptions，clearModelOptions 可清空', async () => {
+    const settings = createSettings();
+    const { store } = await importStore(settings);
+
+    const ok = await store.loadModelsForProfile('profile-beta');
+    expect(ok).toBe(true);
+    expect(store.modelOptions).toEqual(['tm1', 'tm2']);
+    expect(store.modelLoadStatus).toBe('success');
+
+    store.clearModelOptions();
+    expect(store.modelOptions).toEqual([]);
+    expect(store.modelLoadStatus).toBe('idle');
+  });
+
+  it('酒馆预设配置了 model 时，resolveCurrentConfigStatus 正确显示模型名', async () => {
+    const settings = createSettings();
+    settings.apiMode = 'tavern';
+    settings.tavernProfile = 'profile-beta';
+    settings.apiConfig.model = 'gpt-4o';
+    const { store } = await importStore(settings);
+    store.refreshFromSettings();
+
+    expect(store.currentConfigReady).toBe(true);
+    expect(store.currentConfigLabel).toBe('酒馆连接预设 profile-beta (gpt-4o)');
   });
 });

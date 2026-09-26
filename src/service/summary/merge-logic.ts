@@ -3,7 +3,7 @@
 import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_ACU } from '../../shared/defaults-json.js';
 import { isSqliteMode } from '../table/storage-mode';
 import { handleApiResponse_ACU } from '../ai/prompt-builder';
-import { buildCustomApiRequestBody_ACU } from '../ai/api-call';
+import { buildCustomApiRequestBody_ACU, buildConnectionManagerOverrides_ACU } from '../ai/api-call';
 import { currentJsonTableData_ACU, settings_ACU } from '../runtime/state-manager';
 import { sendConnectionManagerRequest_ACU, isGenerateRawAvailable_ACU, generateRaw_ACU } from '../../data/gateways/ai-gateway';
 import { getLastMessageIndex_ACU } from '../../data/gateways/chat-gateway';
@@ -198,9 +198,21 @@ export async function executeAutoMergeBatch_ACU(
             const finalMessages = messagesToUse.map((m: any) => ({ role: m.role.toLowerCase(), content: m.content }));
 
             if (settings_ACU.apiMode === 'tavern') {
-                const result = await sendConnectionManagerRequest_ACU(settings_ACU.tavernProfile, finalMessages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096);
-                if (result && result.ok) aiResponseText = result.result.choices[0].message.content;
-                else throw new Error('API请求返回不成功状态');
+                const overrides = buildConnectionManagerOverrides_ACU(settings_ACU.apiConfig);
+                const result = await sendConnectionManagerRequest_ACU(
+                    settings_ACU.tavernProfile,
+                    finalMessages,
+                    settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096,
+                    { stream: false, extractData: true },
+                    overrides,
+                );
+                if (result && result.ok && result.result?.choices?.[0]?.message?.content) {
+                    aiResponseText = result.result.choices[0].message.content;
+                } else if (result && typeof result.content === 'string') {
+                    aiResponseText = result.content;
+                } else {
+                    throw new Error('API请求返回不成功状态');
+                }
             } else {
                 if (settings_ACU.apiConfig.useMainApi) {
                     aiResponseText = isGenerateRawAvailable_ACU()

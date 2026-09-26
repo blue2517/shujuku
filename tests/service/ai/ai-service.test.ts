@@ -27,7 +27,7 @@ vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: mockLogDebug,
 }));
 
-import { fetchAvailableModels_ACU } from '../../../src/service/ai/ai-service';
+import { fetchAvailableModels_ACU, fetchModelsForProfile_ACU } from '../../../src/service/ai/ai-service';
 
 // 模拟 fetch
 const mockFetch = vi.fn();
@@ -187,5 +187,93 @@ describe('fetchAvailableModels_ACU', () => {
     const result = await fetchAvailableModels_ACU('http://api.test', 'key');
     expect(result.success).toBe(true);
     expect(result.models).toEqual(['valid-model', 'another-valid']);
+  });
+});
+
+describe('fetchModelsForProfile_ACU', () => {
+  it('profileId 为空时返回错误', async () => {
+    const result = await fetchModelsForProfile_ACU('');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('请先选择一个酒馆连接预设');
+  });
+
+  it('未找到 profile 时返回错误', async () => {
+    (globalThis as any).SillyTavern = {
+      getContext: () => ({
+        extensionSettings: {
+          connectionManager: {
+            profiles: [],
+          },
+        },
+      }),
+    };
+
+    const result = await fetchModelsForProfile_ACU('unknown-id');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('未找到所选酒馆连接预设');
+  });
+
+  it('非 chat-completions 类型时返回错误', async () => {
+    (globalThis as any).SillyTavern = {
+      getContext: () => ({
+        extensionSettings: {
+          connectionManager: {
+            profiles: [{ id: 'p1', api: 'text-generation' }],
+          },
+        },
+        CONNECT_API_MAP: {
+          'text-generation': { selected: 'koboldclassic', source: 'kobold' },
+        },
+      }),
+    };
+
+    const result = await fetchModelsForProfile_ACU('p1');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('仅支持 Chat Completion 类接口');
+  });
+
+  it('正常拉取并解析 profile 模型列表', async () => {
+    (globalThis as any).SillyTavern = {
+      getContext: () => ({
+        extensionSettings: {
+          connectionManager: {
+            profiles: [
+              {
+                id: 'p1',
+                api: 'openai',
+                'secret-id': 'sec-123',
+                'api-url': 'https://api.openai.com/v1',
+                proxy: 'proxy1',
+              },
+            ],
+            proxies: [
+              { name: 'proxy1', url: 'https://proxy.example.com', password: 'pwd' },
+            ],
+          },
+        },
+        CONNECT_API_MAP: {
+          openai: { selected: 'openai', source: 'openai' },
+        },
+      }),
+    };
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ id: 'gpt-4o' }, { id: 'claude-3-5-sonnet' }],
+      }),
+    });
+
+    const result = await fetchModelsForProfile_ACU('p1');
+    expect(result.success).toBe(true);
+    expect(result.models).toEqual(['claude-3-5-sonnet', 'gpt-4o']);
+
+    const callArgs = mockFetch.mock.calls[0][1];
+    const body = JSON.parse(callArgs.body);
+    expect(body.chat_completion_source).toBe('openai');
+    expect(body.secret_id).toBe('sec-123');
+    expect(body.reverse_proxy).toBe('https://proxy.example.com');
+    expect(body.proxy_password).toBe('pwd');
+    expect(body.custom_url).toBe('https://api.openai.com/v1');
   });
 });

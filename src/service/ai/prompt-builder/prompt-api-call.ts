@@ -4,7 +4,7 @@
  * 从 prompt-builder.ts 拆出（L195-L501 + L1519-L1604）
  */
 import { currentAbortController_ACU, trackAbortController_ACU, untrackAbortController_ACU, _set_currentAbortController_ACU } from '../../runtime/state-manager';
-import { getApiConfigByPreset_ACU, buildCustomApiRequestBody_ACU } from '../api-call';
+import { getApiConfigByPreset_ACU, buildCustomApiRequestBody_ACU, buildConnectionManagerOverrides_ACU } from '../api-call';
 import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
 import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../../data/gateways/host-state-gateway';
 import { isGenerateRawAvailable_ACU, generateRaw_ACU, sendConnectionManagerRequest_ACU, triggerSlash_ACU, getConnectionManagerProfiles_ACU, getHostRequestHeaders_ACU } from '../../../data/gateways/ai-gateway';
@@ -214,10 +214,7 @@ export class RetryableAiResponseError_ACU extends Error {
                 throw new Error(`无法找到ID为 "${profileId}" 的连接预设。`);
             }
             if (!targetProfile.api) {
-                throw new Error(`预设 "${targetProfile.name || targetProfile.id}" 没有配置API。`);
-            }
-            if (!targetProfile.preset) {
-                throw new Error(`预设 "${targetProfile.name || targetProfile.id}" 没有选择预设。`);
+                throw new Error(`连接预设 "${targetProfile.name || targetProfile.id}" 没有配置API。`);
             }
 
             const targetProfileName = targetProfile.name || targetProfile.id;
@@ -232,10 +229,13 @@ export class RetryableAiResponseError_ACU extends Error {
             
             logDebug_ACU(`ACU: 通过酒馆连接预设 (ID: ${profileId}, Name: ${targetProfileName}) 发送请求...`);
 
+            const overrides = buildConnectionManagerOverrides_ACU(effectiveApiConfig);
             responsePromise = sendConnectionManagerRequest_ACU(
-                profileId, 
-                messages, 
-                effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096
+                profileId,
+                messages,
+                effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096,
+                { stream: false, extractData: true },
+                overrides,
             );
 
             rawResult = await responsePromise;

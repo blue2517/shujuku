@@ -99,17 +99,48 @@
               :options="tavernProfileOptions"
               :model-value="activeDraft.tavernProfile"
               placeholder="请选择"
-              @update:model-value="activeDraft.tavernProfile = $event"
+              @update:model-value="onTavernProfileChange($event)"
             />
           </AcuFormRow>
           <div class="acu-api-config-panel__inline-action">
             <AcuButton @click="store.refreshTavernProfiles">刷新列表</AcuButton>
           </div>
+          <AcuFormRow
+            label="模型名"
+            hint="留空则使用该连接预设在酒馆中配置的默认模型。"
+          >
+            <AcuInput
+              v-model="activeDraft.model"
+              type="text"
+              placeholder="留空 = 使用预设默认模型"
+            />
+          </AcuFormRow>
+          <div class="acu-api-config-panel__inline-action">
+            <AcuButton @click="loadModelsForActive">加载模型</AcuButton>
+            <span
+              v-if="store.modelLoadStatus === 'loading'"
+              class="acu-api-config-panel__muted"
+              >加载中...</span
+            >
+            <span
+              v-else-if="store.modelLoadStatus === 'error'"
+              class="acu-api-config-panel__danger"
+              >{{ store.modelLoadError }}</span
+            >
+          </div>
+          <AcuFormRow v-if="store.modelOptions.length" label="模型列表">
+            <AcuSelect
+              :options="modelSelectOptions"
+              :model-value="activeDraft.model"
+              placeholder="请选择"
+              @update:model-value="activeDraft.model = $event"
+            />
+          </AcuFormRow>
         </template>
       </div>
 
       <div
-        v-if="activeConnectionMode === 'custom'"
+        v-if="activeConnectionMode === 'custom' || activeConnectionMode === 'tavern'"
         class="acu-api-config-panel__two-col"
       >
         <AcuFormRow label="最大回复长度">
@@ -132,7 +163,7 @@
       </div>
 
       <div
-        v-if="activeConnectionMode === 'custom'"
+        v-if="activeConnectionMode === 'custom' || activeConnectionMode === 'tavern'"
         class="acu-api-config-panel__editor-section"
       >
         <AcuFormRow
@@ -155,27 +186,29 @@
             @update:model-value="activeDraft.reasoning_effort = $event"
           />
         </AcuFormRow>
-        <AcuFormRow label="附加主体参数" hint="SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。">
-          <AcuTextarea
-            v-model="activeDraft.bodyParams"
-            :rows="3"
-            placeholder="response_format:&#10;  type: json_object&#10;top_k: 50"
-          />
-        </AcuFormRow>
-        <AcuFormRow label="排除主体参数" hint="会转换为 SillyTavern custom_exclude_body，从最终模型请求体删除指定字段。">
-          <AcuTextarea
-            v-model="activeDraft.excludeBodyParams"
-            :rows="2"
-            placeholder="top_p, reasoning_effort"
-          />
-        </AcuFormRow>
-        <AcuFormRow label="附加请求标头" hint="每行一个 Header: Value，追加到请求头中。">
-          <AcuTextarea
-            v-model="activeDraft.requestHeaders"
-            :rows="2"
-            placeholder="X-Custom-Header: value"
-          />
-        </AcuFormRow>
+        <template v-if="activeConnectionMode === 'custom'">
+          <AcuFormRow label="附加主体参数" hint="SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。">
+            <AcuTextarea
+              v-model="activeDraft.bodyParams"
+              :rows="3"
+              placeholder="response_format:&#10;  type: json_object&#10;top_k: 50"
+            />
+          </AcuFormRow>
+          <AcuFormRow label="排除主体参数" hint="会转换为 SillyTavern custom_exclude_body，从最终模型请求体删除指定字段。">
+            <AcuTextarea
+              v-model="activeDraft.excludeBodyParams"
+              :rows="2"
+              placeholder="top_p, reasoning_effort"
+            />
+          </AcuFormRow>
+          <AcuFormRow label="附加请求标头" hint="每行一个 Header: Value，追加到请求头中。">
+            <AcuTextarea
+              v-model="activeDraft.requestHeaders"
+              :rows="2"
+              placeholder="X-Custom-Header: value"
+            />
+          </AcuFormRow>
+        </template>
       </div>
 
       <AcuMessage v-if="activeDraftError" kind="error">{{
@@ -351,10 +384,19 @@ async function deletePreset(name: string): Promise<void> {
 }
 
 function presetMeta(preset: AcuV2ApiPreset): string {
-  if (preset.apiMode === "tavern") return "酒馆预设";
+  if (preset.apiMode === "tavern") {
+    const profile = store.tavernProfiles.find((p) => p.id === preset.tavernProfile);
+    const profileLabel = profile?.name || preset.tavernProfile || "酒馆预设";
+    return preset.apiConfig.model ? `${profileLabel} (${preset.apiConfig.model})` : profileLabel;
+  }
   return preset.apiConfig.useMainApi
     ? "酒馆主 API"
     : preset.apiConfig.model || "自定义";
+}
+
+function onTavernProfileChange(profileId: string): void {
+  activeDraft.tavernProfile = profileId;
+  store.clearModelOptions();
 }
 
 function validateActiveDraft(): boolean {
@@ -403,14 +445,23 @@ function saveActiveDraft(): void {
 
 function setActiveConnectionMode(value: string): void {
   applyConnectionMode(activeDraft, value as ConnectionMode);
+  store.clearModelOptions();
   activeDraftSavedAt.value = null;
 }
 
 async function loadModelsForActive(): Promise<void> {
-  await store.loadModelsForConfig({
-    url: activeDraft.url,
-    apiKey: activeDraft.apiKey,
-  });
+  if (activeConnectionMode.value === "tavern") {
+    if (!activeDraft.tavernProfile) {
+      toast.warning("请先选择酒馆连接预设。");
+      return;
+    }
+    await store.loadModelsForProfile(activeDraft.tavernProfile);
+  } else {
+    await store.loadModelsForConfig({
+      url: activeDraft.url,
+      apiKey: activeDraft.apiKey,
+    });
+  }
 }
 
 watch(

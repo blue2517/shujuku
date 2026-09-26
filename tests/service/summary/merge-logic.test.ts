@@ -90,6 +90,7 @@ vi.mock('../../../src/service/ai/prompt-builder', () => ({
 vi.mock('../../../src/service/ai/api-call', () => ({
   buildCustomApiRequestBody_ACU: mockBuildCustomBody,
   getApiConfigByPreset_ACU: vi.fn(),
+  buildConnectionManagerOverrides_ACU: vi.fn(() => ({})),
 }));
 
 import {
@@ -369,7 +370,9 @@ describe('executeAutoMergeBatch_ACU max_tokens 回退', () => {
     expect(mockSendConnectionManager).toHaveBeenCalledWith(
       expect.any(String),
       expect.any(Array),
-      0
+      0,
+      { stream: false, extractData: true },
+      expect.any(Object),
     );
   });
 

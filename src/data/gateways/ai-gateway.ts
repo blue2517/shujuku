@@ -60,6 +60,8 @@ export async function generateRaw_ACU(options: {
  * @param profileId 配置文件 ID
  * @param messages 消息数组
  * @param maxTokens 最大 token 数
+ * @param options 请求选项（流式、提取数据等）
+ * @param overridePayload 覆盖参数（model, temperature 等）
  * @returns API 响应结果
  * @throws 如果 ConnectionManagerRequestService 不可用
  */
@@ -67,11 +69,19 @@ export async function sendConnectionManagerRequest_ACU(
     profileId: string,
     messages: any[],
     maxTokens: number,
+    options: any = { stream: false, extractData: true },
+    overridePayload: Record<string, any> = {},
 ): Promise<any> {
     if (!isConnectionManagerAvailable_ACU()) {
         throw new Error('ConnectionManagerRequestService 不可用。请检查酒馆版本或连接管理器配置。');
     }
-    return await SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest(profileId, messages, maxTokens);
+    return await SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest(
+        profileId,
+        messages,
+        maxTokens,
+        options,
+        overridePayload,
+    );
 }
 
 /**
@@ -94,7 +104,16 @@ export async function triggerSlash_ACU(command: string): Promise<string> {
  * @returns 配置文件数组，不可用时返回 []
  */
 export function getConnectionManagerProfiles_ACU(): any[] {
-    return SillyTavern_API_ACU?.extensionSettings?.connectionManager?.profiles || [];
+    const fromApi = SillyTavern_API_ACU?.extensionSettings?.connectionManager?.profiles;
+    if (Array.isArray(fromApi)) return fromApi;
+    const ctx = (globalThis as any).SillyTavern?.getContext?.();
+    const fromCtx = ctx?.extensionSettings?.connectionManager?.profiles;
+    if (Array.isArray(fromCtx)) return fromCtx;
+    const hostWin = (globalThis as any).parent || globalThis;
+    const fromExt = (globalThis as any).extension_settings?.connectionManager?.profiles
+        ?? hostWin?.extension_settings?.connectionManager?.profiles;
+    if (Array.isArray(fromExt)) return fromExt;
+    return [];
 }
 
 // ═══ 请求认证 ═══
