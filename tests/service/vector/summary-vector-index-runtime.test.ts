@@ -108,7 +108,17 @@ vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({
   enqueueSummaryVectorIndexFlush_ACU: (...a: any[]) => h.enqueueFlush(...a),
 }));
 
-import { processSummaryVectorIndexBeforeGeneration_ACU } from '../../../src/service/vector/summary-vector-index-runtime';
+import {
+  extractCompleteTailSentences_ACU,
+  processSummaryVectorIndexBeforeGeneration_ACU,
+  stripQueryTags_ACU,
+  testSummaryVectorRecallNow_ACU,
+} from '../../../src/service/vector/summary-vector-index-runtime';
+import {
+  clearLatestSummaryVectorRecallSnapshot_ACU,
+  getLatestSummaryVectorRecallDiagnostics_ACU,
+  getLatestSummaryVectorRecallSnapshot_ACU,
+} from '../../../src/service/vector/summary-vector-recall-cache';
 
 
 function row_ACU(key: string, order: number, summary: string): any {
@@ -201,6 +211,7 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     h.saveChatStrict.mockResolvedValue(undefined);
     h.tagData = {};
     h.writeTagData.mockReset();
+    clearLatestSummaryVectorRecallSnapshot_ACU();
     vi.stubGlobal('fetch', vi.fn());
     setFixture_ACU();
   });
@@ -624,4 +635,230 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU invalid snapshot recover
     expect(h.clearInvalid).toHaveBeenCalledTimes(1);
   });
 
+});
+
+describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索与共享上限', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.chat = [{ is_user: true, mes: 'latest user' } as any];
+    h.entries = [];
+    h.callAI.mockResolvedValue('<keywords>secret relic</keywords>');
+    h.createEmbeddings.mockResolvedValue([{ index: 0, embedding: [1, 0] }]);
+    h.createEntries.mockResolvedValue(undefined);
+    h.setEntries.mockResolvedValue(undefined);
+    h.loadChunks.mockImplementation(async () => h.chunks);
+    h.snapshot = null;
+    clearLatestSummaryVectorRecallSnapshot_ACU();
+    setFixture_ACU();
+  });
+
+  it('stripQueryTags_ACU 完整剥离标签及其内部内容', () => {
+    const raw = '灵灵飘进来问下一站去哪？\n<标签触发>日常·推进·后日谈</标签触发>\n<Summary>隐藏总结</summary>';
+    const cleaned = stripQueryTags_ACU(raw, '标签触发, <summary>');
+    expect(cleaned).toBe('灵灵飘进来问下一站去哪？');
+    expect(cleaned).not.toContain('日常·推进·后日谈');
+    expect(cleaned).not.toContain('隐藏总结');
+  });
+
+  it('extractCompleteTailSentences_ACU 从末尾截取完整句子，不截断半句', () => {
+    const text = '前面是很长的环境描写，交代了大礼堂与走廊的布置。第二句赫敏脸上露出一丝笑意，说完待会儿大礼堂见。第三句灵灵飘进来打了个响指问下一站去哪？';
+    const tail = extractCompleteTailSentences_ACU(text, 45);
+    expect(tail).not.toContain('环境描写');
+    expect(tail.startsWith('第二句') || tail.startsWith('第三句')).toBe(true);
+    expect(tail.endsWith('下一站去哪？')).toBe(true);
+  });
+
+  it('keywordGenerationEnabled=false 时跳过小模型，先剥离标签再拼接末尾完整句与用户输入', async () => {
+    h.chat = [
+      {
+        is_user: false,
+        mes: '远景铺垫非常多无关的文字内容，不应该被带入检索文本里。赫敏转身离开走廊。灵灵飘进窗框问下一站选哪个盲盒？\n<标签触发>日常·推进·后日谈</标签触发>',
+      },
+      { is_user: true, mes: '打开盲盒看看' },
+    ] as any;
+    h.config = defaultConfig_ACU({
+      keywordGenerationEnabled: false,
+      queryStripTags: '标签触发',
+      queryTailCharLimit: 32,
+      summaryIndexRecentFixedInjectCount: 0,
+    });
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({
+      userInput: '打开盲盒看看',
+      source: 'direct-query-test',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.keywordCount).toBe(0);
+    expect(h.callAI).not.toHaveBeenCalled();
+    const sentInput = String(h.createEmbeddings.mock.calls[0]?.[0]?.input?.[0] || '');
+    expect(sentInput).toContain('打开盲盒看看');
+    expect(sentInput).toContain('灵灵飘进窗框问下一站选哪个盲盒？');
+    expect(sentInput.indexOf('灵灵飘进窗框问下一站选哪个盲盒？')).toBeLessThan(sentInput.indexOf('打开盲盒看看'));
+    expect(sentInput).not.toContain('日常·推进·后日谈');
+    expect(sentInput).not.toContain('远景铺垫');
+  });
+
+  it('extractCompleteTailSentences_ACU 不会把句末右引号「」误留到下一句开头', () => {
+    const text = '她犹豫了一下问道：「虽然伦敦老街区寄信可能还是猫头鹰方便点，不过这上头……能留个电话吗？」赫敏手指抓着挎包带子，看着窗外空荡荡的草坪，从包里摸出一张便签纸递过来。';
+    const tail = extractCompleteTailSentences_ACU(text, 55);
+    expect(tail.startsWith('」')).toBe(false);
+    expect(tail).toBe('赫敏手指抓着挎包带子，看着窗外空荡荡的草坪，从包里摸出一张便签纸递过来。');
+  });
+
+  it('summaryIndexSharedTotalLimit 约束「最近固定 + 向量召回」总数并写入运行时初筛缓存', async () => {
+    const r1 = row_ACU('r1', 1, 'summary 1');
+    const r2 = row_ACU('r2', 2, 'summary 2');
+    const r3 = row_ACU('r3', 3, 'summary 3');
+    const r4 = row_ACU('r4', 4, 'summary 4');
+    const r5 = row_ACU('r5', 5, 'summary 5');
+    h.rows = [r1, r2, r3, r4, r5];
+    h.chunks = [
+      chunk_ACU(r1, 'match alpha', [1, 0]),
+      chunk_ACU(r2, 'match beta', [1, 0]),
+      chunk_ACU(r3, 'match gamma', [1, 0]),
+      chunk_ACU(r4, 'recent 4', [0, 1]),
+      chunk_ACU(r5, 'recent 5', [0, 1]),
+    ];
+    h.config = defaultConfig_ACU({
+      keywordGenerationEnabled: false,
+      summaryIndexKeywordMinRows: 1,
+      summaryIndexRecentFixedInjectCount: 2,
+      topK: 10,
+      recallCandidateLimit: 10,
+      summaryIndexSharedTotalLimit: 3,
+      summaryIndexMinScore: 0,
+    });
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({
+      userInput: 'match',
+      source: 'shared-cap-test',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.injectedCount).toBe(3);
+    expect(result.selectedIndexCodes).toHaveLength(3);
+    expect(result.selectedIndexCodes).toContain('IDX-4');
+    expect(result.selectedIndexCodes).toContain('IDX-5');
+    const snapshot = getLatestSummaryVectorRecallSnapshot_ACU();
+    expect(snapshot?.indexCodes).toEqual(result.selectedIndexCodes);
+  });
+
+  it('keywordGenerationEnabled=true 时传给关键词 AI 的上下文同样会按 queryStripTags 剥离标签', async () => {
+    h.chat = [
+      {
+        is_user: false,
+        mes: '赫敏在走廊嘱咐复习事项。\n<标签触发>日常·推进·后日谈</标签触发>',
+      },
+      { is_user: true, mes: '打开盲盒看看' },
+    ] as any;
+    h.config = defaultConfig_ACU({
+      keywordGenerationEnabled: true,
+      keywordPromptGroup: [{ role: 'user', content: '$RECENT_CONTEXT\n$USER_INPUT' }],
+      queryStripTags: '标签触发',
+      summaryIndexRecentFixedInjectCount: 0,
+    });
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({
+      userInput: '打开盲盒看看',
+      source: 'keyword-strip-tags-test',
+    });
+
+    expect(result.success).toBe(true);
+    expect(h.callAI).toHaveBeenCalledTimes(1);
+    const callPayload = JSON.stringify(h.callAI.mock.calls[0]);
+    expect(callPayload).toContain('赫敏在走廊嘱咐复习事项');
+    expect(callPayload).not.toContain('日常·推进·后日谈');
+  });
+
+  it('关闭数据隔离时（层键为空串、manifest 为 default），剧情推进按空串查询仍能命中交火初筛缓存', async () => {
+    const r1 = row_ACU('r1', 1, 'summary 1');
+    const r2 = row_ACU('r2', 2, 'summary 2');
+    const r3 = row_ACU('r3', 3, 'summary 3');
+    h.rows = [r1, r2, r3];
+    h.chunks = [
+      chunk_ACU(r1, 'match alpha', [1, 0]),
+      chunk_ACU(r2, 'unrelated beta', [0, 1]),
+      chunk_ACU(r3, 'recent 3', [0, 1]),
+    ];
+    h.snapshot = {
+      summaryVectorIndexState: {
+        rows: h.rows,
+        chunks: h.chunks,
+        manifest: {
+          indexId: 'idx-default',
+          chatKey: 'my-chat',
+          isolationKey: 'default',
+          sourceTableKey: 'summary-source',
+          snapshot: { activeRowKeys: h.rows.map((r) => r.rowKey) },
+        },
+      },
+      layers: [{
+        messageIndex: 0,
+        isolationKey: '',
+        summaryVectorIndexState: { manifest: { indexId: 'idx-default', sourceTableKey: 'summary-source' } },
+      }],
+    };
+    h.config = defaultConfig_ACU({
+      keywordGenerationEnabled: false,
+      summaryIndexKeywordMinRows: 1,
+      summaryIndexRecentFixedInjectCount: 1,
+      topK: 1,
+      recallCandidateLimit: 5,
+      summaryIndexSharedTotalLimit: 2,
+      summaryIndexMinScore: 0,
+    });
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({
+      userInput: 'match alpha',
+      source: 'default-isolation-cache-match',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.selectedIndexCodes).toEqual(['IDX-1', 'IDX-3']);
+    const matched = getLatestSummaryVectorRecallSnapshot_ACU('my-chat', '');
+    expect(matched?.indexCodes).toEqual(['IDX-1', 'IDX-3']);
+    expect(getLatestSummaryVectorRecallSnapshot_ACU('other-chat', '')).toBeNull();
+    expect(getLatestSummaryVectorRecallSnapshot_ACU('my-chat', 'iso-other')).toBeNull();
+  });
+
+  it('testSummaryVectorRecallNow_ACU 试跑记录完整检索文本、分数与命中分片，且不写世界书或覆盖线上初筛缓存', async () => {
+    const r1 = row_ACU('r1', 1, 'summary alpha');
+    const r2 = row_ACU('r2', 2, 'summary recent');
+    h.rows = [r1, r2];
+    h.chunks = [
+      chunk_ACU(r1, '古堡地窖发现旧日记本，线索指向密室。', [1, 0]),
+      chunk_ACU(r2, '回到大厅吃晚餐。', [0, 1]),
+    ];
+    h.chat = [
+      { is_user: false, mes: '灵灵提醒我们去查密室线索。\n<标签触发>探索·分支</标签触发>' },
+    ] as any;
+    h.config = defaultConfig_ACU({
+      keywordGenerationEnabled: false,
+      queryStripTags: '标签触发',
+      queryTailCharLimit: 100,
+      summaryIndexKeywordMinRows: 1,
+      summaryIndexRecentFixedInjectCount: 1,
+      topK: 1,
+      recallCandidateLimit: 5,
+      summaryIndexSharedTotalLimit: 2,
+      summaryIndexMinScore: 0,
+    });
+
+    const result = await testSummaryVectorRecallNow_ACU('去查密室线索');
+
+    expect(result.success).toBe(true);
+    expect(h.createEntries).not.toHaveBeenCalled();
+    expect(h.setEntries).not.toHaveBeenCalled();
+    expect(getLatestSummaryVectorRecallSnapshot_ACU()).toBeNull();
+    expect(result.diagnostics?.dryRun).toBe(true);
+    expect(result.diagnostics?.queryText).toContain('去查密室线索');
+    expect(result.diagnostics?.queryText).toContain('灵灵提醒我们去查密室线索。');
+    expect(result.diagnostics?.queryText).not.toContain('探索·分支');
+    const rankedDiag = result.diagnostics?.items.find((item) => item.kind === 'ranked');
+    expect(rankedDiag?.indexCode).toBe('IDX-1');
+    expect(rankedDiag?.matchedChunkText).toContain('古堡地窖发现旧日记本');
+    expect(rankedDiag?.denseScore).toBe(1);
+    expect(getLatestSummaryVectorRecallDiagnostics_ACU()?.queryText).toBe(result.diagnostics?.queryText);
+  });
 });

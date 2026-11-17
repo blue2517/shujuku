@@ -1,10 +1,13 @@
 import { reactive, ref } from "vue";
+import { fetchModelsFromVectorEndpoint_ACU } from "../../service/ai/ai-service";
 import { saveSettings_ACU } from "../../service/settings/settings-service";
 import {
   getCurrentVectorMemoryConfig_ACU,
   validateSummaryVectorIndexConfig_ACU,
 } from "../../service/vector/vector-memory-config";
 import { useToastStore } from "../stores/toast-store";
+
+export type VectorModelLoadStatus = "idle" | "loading" | "loaded" | "error";
 
 export interface VectorApiForm {
   embeddingEndpoint: string;
@@ -33,6 +36,12 @@ export function useVectorApiConfig() {
   const form = reactive<VectorApiForm>(createEmptyForm());
   const errors = ref<string[]>([]);
   const savedAt = ref<number | null>(null);
+  const embeddingModels = ref<string[]>([]);
+  const embeddingModelLoadStatus = ref<VectorModelLoadStatus>("idle");
+  const embeddingModelLoadError = ref("");
+  const rerankModels = ref<string[]>([]);
+  const rerankModelLoadStatus = ref<VectorModelLoadStatus>("idle");
+  const rerankModelLoadError = ref("");
 
   function refresh(): void {
     const config = getCurrentVectorMemoryConfig_ACU();
@@ -44,6 +53,48 @@ export function useVectorApiConfig() {
     form.rerankApiKey = config.rerankApiKey || "";
     form.rerankInstruction = config.rerankInstruction ?? "";
     errors.value = [];
+  }
+
+  async function loadModelsForTarget(target: "embedding" | "rerank"): Promise<boolean> {
+    const endpoint = target === "embedding" ? form.embeddingEndpoint : form.rerankEndpoint;
+    const apiKey = target === "embedding" ? form.embeddingApiKey : form.rerankApiKey;
+    const modelsRef = target === "embedding" ? embeddingModels : rerankModels;
+    const statusRef = target === "embedding" ? embeddingModelLoadStatus : rerankModelLoadStatus;
+    const errorRef = target === "embedding" ? embeddingModelLoadError : rerankModelLoadError;
+    const label = target === "embedding" ? "Embedding" : "Rerank";
+
+    if (!endpoint.trim()) {
+      statusRef.value = "error";
+      errorRef.value = `请先填写 ${label} URL。`;
+      return false;
+    }
+
+    statusRef.value = "loading";
+    errorRef.value = "";
+    try {
+      const result = await fetchModelsFromVectorEndpoint_ACU(endpoint, apiKey);
+      if (!result.success || !result.models?.length) {
+        statusRef.value = "error";
+        errorRef.value = result.error || `未能从 ${label} 端点拉取到模型。`;
+        return false;
+      }
+      modelsRef.value = [...result.models];
+      statusRef.value = "loaded";
+      toast.success(`已拉取 ${result.models.length} 个 ${label} 候选模型。`);
+      return true;
+    } catch (error: any) {
+      statusRef.value = "error";
+      errorRef.value = error?.message || `拉取 ${label} 模型失败。`;
+      return false;
+    }
+  }
+
+  function loadEmbeddingModels(): Promise<boolean> {
+    return loadModelsForTarget("embedding");
+  }
+
+  function loadRerankModels(): Promise<boolean> {
+    return loadModelsForTarget("rerank");
   }
 
   function save(): boolean {
@@ -75,6 +126,14 @@ export function useVectorApiConfig() {
     form,
     errors,
     savedAt,
+    embeddingModels,
+    embeddingModelLoadStatus,
+    embeddingModelLoadError,
+    rerankModels,
+    rerankModelLoadStatus,
+    rerankModelLoadError,
+    loadEmbeddingModels,
+    loadRerankModels,
     refresh,
     save,
   };

@@ -65,6 +65,12 @@ export interface VectorMemoryConfig_ACU {
     keywordPromptGroup: VectorMemoryKeywordPromptSegment_ACU[];
     recallCandidateLimit: number;
     recentFixedInjectCount: number;
+    summaryIndexSharedTotalLimit: number;
+    summaryIndexVectorColumns: string[];
+    summaryIndexPlotInjectColumns: string[];
+    keywordGenerationEnabled: boolean;
+    queryStripTags: string;
+    queryTailCharLimit: number;
     summaryIndexV2WriteEnabled: boolean;
     summaryIndexV2WriteScopeAllowlist: string[];
     summaryIndexRollingDeltaEnabled: boolean;
@@ -139,12 +145,25 @@ function normalizeKeywordPromptGroup_ACU(
         : JSON.parse(JSON.stringify(fallbackValue));
 }
 
-function normalizeSummaryIndexV2WriteScopeAllowlist_ACU(value: any): string[] {
+function normalizeNonNegativeIntegerLocal_ACU(value: any, fallbackValue: number): number {
+    const num = Number(value);
+    return Number.isFinite(num) && num >= 0 ? Math.floor(num) : fallbackValue;
+}
+
+function normalizeUniqueStringList_ACU(value: any): string[] {
     if (!Array.isArray(value)) return [];
     return Array.from(new Set(value
         .filter((item): item is string => typeof item === 'string')
         .map((item) => item.trim())
         .filter(Boolean)));
+}
+
+function normalizeColumnNameList_ACU(value: any): string[] {
+    return normalizeUniqueStringList_ACU(value);
+}
+
+function normalizeSummaryIndexV2WriteScopeAllowlist_ACU(value: any): string[] {
+    return normalizeUniqueStringList_ACU(value);
 }
 
 export function getDefaultVectorMemoryConfig_ACU(): VectorMemoryConfig_ACU {
@@ -208,6 +227,20 @@ export function normalizeVectorMemoryConfig_ACU(rawConfig: any): VectorMemoryCon
         recentFixedInjectCount: normalizePositiveInteger_ACU(
             (source as any).recentFixedInjectCount,
             (defaults as any).recentFixedInjectCount || 50,
+        ),
+        summaryIndexSharedTotalLimit: normalizeNonNegativeIntegerLocal_ACU(
+            (source as any).summaryIndexSharedTotalLimit,
+            Number((defaults as any).summaryIndexSharedTotalLimit) || 0,
+        ),
+        summaryIndexVectorColumns: normalizeColumnNameList_ACU((source as any).summaryIndexVectorColumns),
+        summaryIndexPlotInjectColumns: normalizeColumnNameList_ACU((source as any).summaryIndexPlotInjectColumns),
+        keywordGenerationEnabled: (source as any).keywordGenerationEnabled !== false,
+        queryStripTags: typeof (source as any).queryStripTags === 'string'
+            ? (source as any).queryStripTags.trim()
+            : ((defaults as any).queryStripTags || ''),
+        queryTailCharLimit: normalizePositiveInteger_ACU(
+            (source as any).queryTailCharLimit,
+            Number((defaults as any).queryTailCharLimit) || 400,
         ),
         summaryIndexV2WriteEnabled: typeof (source as any).summaryIndexV2WriteEnabled === 'boolean'
             ? (source as any).summaryIndexV2WriteEnabled
@@ -380,6 +413,12 @@ export interface SummaryVectorIndexEffectiveConfig_ACU extends VectorMemoryConfi
     summaryIndexHybridRetrievalEnabled: boolean;
     summaryIndexBm25CandidateLimit: number;
     summaryIndexRrfK: number;
+    summaryIndexSharedTotalLimit: number;
+    summaryIndexVectorColumns: string[];
+    summaryIndexPlotInjectColumns: string[];
+    keywordGenerationEnabled: boolean;
+    queryStripTags: string;
+    queryTailCharLimit: number;
     summaryIndexV2WriteEnabled: boolean;
     summaryIndexV2WriteScopeAllowlist: string[];
     summaryIndexRollingDeltaEnabled: boolean;
@@ -447,6 +486,20 @@ export function getEffectiveSummaryVectorIndexConfig_ACU(configInput?: any): Sum
         summaryIndexHybridRetrievalEnabled: config.hybridRetrievalEnabled !== false,
         summaryIndexBm25CandidateLimit: bm25CandidateLimit,
         summaryIndexRrfK: rrfK,
+        summaryIndexSharedTotalLimit: normalizeNonNegativeIntegerLocal_ACU(
+            (config as any).summaryIndexSharedTotalLimit,
+            Number((defaults as any).summaryIndexSharedTotalLimit) || 0,
+        ),
+        summaryIndexVectorColumns: normalizeColumnNameList_ACU((config as any).summaryIndexVectorColumns),
+        summaryIndexPlotInjectColumns: normalizeColumnNameList_ACU((config as any).summaryIndexPlotInjectColumns),
+        keywordGenerationEnabled: (config as any).keywordGenerationEnabled !== false,
+        queryStripTags: typeof (config as any).queryStripTags === 'string'
+            ? (config as any).queryStripTags.trim()
+            : ((defaults as any).queryStripTags || ''),
+        queryTailCharLimit: normalizePositiveInteger_ACU(
+            (config as any).queryTailCharLimit,
+            Number((defaults as any).queryTailCharLimit) || 400,
+        ),
         summaryIndexV2WriteEnabled: config.summaryIndexV2WriteEnabled === true,
         summaryIndexV2WriteScopeAllowlist: normalizeSummaryIndexV2WriteScopeAllowlist_ACU((config as any).summaryIndexV2WriteScopeAllowlist),
         summaryIndexRollingDeltaEnabled: (config as any).summaryIndexRollingDeltaEnabled === true,

@@ -121,6 +121,13 @@ async function mountVectorIndexPage(opts: {
   }));
   const inspectHealth = vi.fn(async () => healthReport);
 
+  const fetchVectorModels = vi.fn(async (endpoint: string) => ({
+    success: true,
+    models: endpoint.includes('rerank')
+      ? ['BAAI/bge-reranker-v2-m3']
+      : ['BAAI/bge-m3', 'text-embedding-3-large'],
+  }));
+
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     settings_ACU: settings,
     currentChatFileIdentifier_ACU: 'chat-vector',
@@ -136,6 +143,7 @@ async function mountVectorIndexPage(opts: {
   vi.doMock('../../../src/service/ai/ai-service', () => ({
     getConnectionManagerProfiles_ACU: () => [],
     fetchAvailableModels_ACU: vi.fn(async () => ({ success: true, models: [] })),
+    fetchModelsFromVectorEndpoint_ACU: fetchVectorModels,
   }));
   vi.doMock('../../../src/service/vector/vector-memory-config', () => ({
     getCurrentVectorMemoryConfig_ACU: () => config,
@@ -149,6 +157,7 @@ async function mountVectorIndexPage(opts: {
   vi.doMock('../../../src/service/vector/summary-vector-index-archive-service', () => ({
     archiveSummaryVectorIndexNow_ACU: archiveSummary,
     migrateLegacySummaryVectorIndexToContentAddressed_ACU: migrateLegacy,
+    getSummaryTableColumnNames_ACU: () => ['编码索引', '时间跨度', '概览', '纪要', '重要对话'],
   }));
   vi.doMock('../../../src/service/vector/summary-vector-index-rebuild-service', () => ({
     rebuildCurrentSummaryVectorIndexNow_ACU: rebuildNow,
@@ -188,6 +197,56 @@ async function mountVectorIndexPage(opts: {
     deleteCurrentSummaryVectorIndexFromChat_ACU: deleteIndex,
   }));
 
+  const testRecall = vi.fn(async (input?: string) => ({
+    success: true,
+    skipped: false,
+    injectedCount: 2,
+    diagnostics: {
+      chatKey: 'chat-vector',
+      isolationKey: '',
+      source: 'ui-dry-run',
+      dryRun: true,
+      success: true,
+      skipped: false,
+      userInput: input || '去大礼堂',
+      queryMode: 'direct',
+      queryText: '去大礼堂\n赫敏提醒待会儿见。',
+      keywords: [],
+      denseCandidateCount: 3,
+      sparseCandidateCount: 1,
+      fusionCandidateCount: 3,
+      rerankStatus: 'applied',
+      recentFixedCount: 1,
+      rankedCount: 1,
+      totalSelectedCount: 2,
+      durationMs: 42,
+      updatedAt: Date.now(),
+      items: [
+        {
+          indexCode: 'AM0003',
+          rowKey: 'r3',
+          kind: 'ranked',
+          summaryPreview: '大礼堂期末集合约定',
+          matchedChunkText: '赫敏抱着猫笼走向大礼堂楼梯口。',
+          denseScore: 0.72,
+          rerankScore: 0.91,
+        },
+        {
+          indexCode: 'AM0021',
+          rowKey: 'r21',
+          kind: 'recent_fixed',
+          summaryPreview: '最新剧情节点',
+        },
+      ],
+    },
+  }));
+  vi.doMock('../../../src/service/vector/summary-vector-index-runtime', () => ({
+    testSummaryVectorRecallNow_ACU: testRecall,
+  }));
+  vi.doMock('../../../src/service/vector/summary-vector-recall-cache', () => ({
+    getLatestSummaryVectorRecallDiagnostics_ACU: vi.fn(() => null),
+  }));
+
   const mount = await import('../../../src/presentation-v2/bootstrap/mount');
   await mount.openAcuV2App();
   await new Promise(r => setTimeout(r, 0));
@@ -208,6 +267,8 @@ async function mountVectorIndexPage(opts: {
     clearCache,
     deleteIndex,
     getStats,
+    fetchVectorModels,
+    testRecall,
   };
 }
 
@@ -290,7 +351,7 @@ describe('VectorIndexPage', () => {
     expect(promptPanel.querySelector('.acu-v2-vector-index-page__prompt-overview')).toBeNull();
     const mobileNavItems = Array.from(page!.querySelectorAll('.acu-mobile-panel-nav__item'))
       .map(item => item.textContent?.trim());
-    expect(mobileNavItems).toEqual(['索引状态', '关键词', '向量服务', '提示词']);
+    expect(mobileNavItems).toEqual(['索引状态', '关键词', '向量服务', '提示词', '效果诊断']);
 
     mount.__resetAcuV2MountForTests();
   });
@@ -333,7 +394,7 @@ describe('VectorIndexPage', () => {
     expect(document.querySelector('.acu-v2-vector-index-page__scope-allowlist')).toBeNull();
     const mobileNavItems = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-mobile-panel-nav__item'))
       .map(item => item.textContent?.trim());
-    expect(mobileNavItems).toEqual(['索引状态', '关键词', '向量服务', '提示词', '召回参数', '归档分块']);
+    expect(mobileNavItems).toEqual(['索引状态', '关键词', '向量服务', '提示词', '召回参数', '归档分块', '效果诊断']);
 
     mount.__resetAcuV2MountForTests();
   });
@@ -589,6 +650,148 @@ describe('VectorIndexPage', () => {
     const { mount } = await mountVectorIndexPage({ devOptions: { vectorIndexAdvanced: true } });
     expect(document.querySelector('.acu-v2-vector-index-page__scope-allowlist')).toBeNull();
     expect(document.body.textContent || '').not.toContain('V2 写入闸门');
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('独立勾选被向量化列与推进 AI 注入列，并可设置共享总上限', async () => {
+    const { mount, config, saveSettings } = await mountVectorIndexPage();
+
+    const vectorRow = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
+      .find(el => el.textContent?.includes('被向量化的列'))!;
+    const plotRow = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
+      .find(el => el.textContent?.includes('推进 AI 注入列'))!;
+
+    const vectorSummaryBtn = Array.from(vectorRow.querySelectorAll<HTMLButtonElement>('.acu-checkbox'))
+      .find(btn => btn.textContent?.trim() === '纪要')!;
+    const plotDialogueBtn = Array.from(plotRow.querySelectorAll<HTMLButtonElement>('.acu-checkbox'))
+      .find(btn => btn.textContent?.trim() === '重要对话')!;
+
+    vectorSummaryBtn.click();
+    plotDialogueBtn.click();
+    await nextTick();
+
+    expect(config.summaryIndexVectorColumns).toEqual(['纪要']);
+    expect(config.summaryIndexPlotInjectColumns).toEqual(['重要对话']);
+
+    const sharedCapRow = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
+      .find(el => el.textContent?.includes('共享总上限'))!;
+    const capInput = sharedCapRow.querySelector('input') as HTMLInputElement;
+    capInput.value = '40';
+    capInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await nextTick();
+
+    expect(config.summaryIndexSharedTotalLimit).toBe(40);
+    expect(saveSettings).toHaveBeenCalled();
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('关闭关键词 AI 生成后可设置末尾完整句字数与剥离标签', async () => {
+    const { mount, config, saveSettings } = await mountVectorIndexPage();
+
+    const toggleRow = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
+      .find(el => el.textContent?.includes('启用关键词 AI 生成'))!;
+    const toggleBtn = toggleRow.querySelector('button[role="switch"]') as HTMLButtonElement;
+    toggleBtn.click();
+    await nextTick();
+
+    expect(config.keywordGenerationEnabled).toBe(false);
+    expect(document.querySelector('.acu-v2-vector-index-page')?.textContent || '').not.toContain('关键词 API 预设');
+
+    const tailRow = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
+      .find(el => el.textContent?.includes('最新 AI 回复末尾截取字数（完整句子）'))!;
+    const tailInput = tailRow.querySelector('input') as HTMLInputElement;
+    tailInput.value = '350';
+    tailInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const stripRow = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
+      .find(el => el.textContent?.includes('标签清洗（剥离指定标签及内部内容）'))!;
+    const stripTextarea = stripRow.querySelector('textarea') as HTMLTextAreaElement;
+    stripTextarea.value = '标签触发, summary';
+    stripTextarea.dispatchEvent(new Event('change', { bubbles: true }));
+    await nextTick();
+
+    expect(config.queryTailCharLimit).toBe(350);
+    expect(config.queryStripTags).toBe('标签触发, summary');
+    expect(saveSettings).toHaveBeenCalled();
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('Embedding 与 Rerank 支持拉取模型列表并通过下拉框选择', async () => {
+    const { mount, fetchVectorModels } = await mountVectorIndexPage();
+
+    const apiPanel = document.getElementById('vector-index-api-panel')!;
+    const fieldsets = Array.from(apiPanel.querySelectorAll('fieldset'));
+    const embFieldset = fieldsets[0];
+    const rerankFieldset = fieldsets[1];
+
+    const rerankUrlInput = rerankFieldset.querySelector('input[type="text"]') as HTMLInputElement;
+    rerankUrlInput.value = 'https://api.siliconflow.cn/v1/rerank';
+    rerankUrlInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+
+    const embLoadBtn = Array.from(embFieldset.querySelectorAll('button')).find(b => b.textContent?.includes('加载模型'))!;
+    const rerankLoadBtn = Array.from(rerankFieldset.querySelectorAll('button')).find(b => b.textContent?.includes('加载模型'))!;
+
+    embLoadBtn.click();
+    rerankLoadBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+    await nextTick();
+
+    expect(fetchVectorModels).toHaveBeenCalledWith('https://emb', '');
+    expect(fetchVectorModels).toHaveBeenCalledWith('https://api.siliconflow.cn/v1/rerank', '');
+    expect(embFieldset.textContent || '').toContain('Embedding 模型列表');
+    expect(rerankFieldset.textContent || '').toContain('Rerank 模型列表');
+
+    const embTrigger = embFieldset.querySelector<HTMLButtonElement>('.acu-select__trigger')!;
+    embTrigger.click();
+    await nextTick();
+    const embItem = Array.from(embFieldset.querySelectorAll<HTMLElement>('.acu-select__item'))
+      .find(el => el.textContent?.trim() === 'BAAI/bge-m3')!;
+    expect(embItem).toBeTruthy();
+    embItem.click();
+    await nextTick();
+
+    const rerankTrigger = rerankFieldset.querySelector<HTMLButtonElement>('.acu-select__trigger')!;
+    rerankTrigger.click();
+    await nextTick();
+    const rerankItem = Array.from(rerankFieldset.querySelectorAll<HTMLElement>('.acu-select__item'))
+      .find(el => el.textContent?.trim() === 'BAAI/bge-reranker-v2-m3')!;
+    expect(rerankItem).toBeTruthy();
+    rerankItem.click();
+    await nextTick();
+
+    expect((embFieldset.querySelectorAll('input')[1] as HTMLInputElement).value).toBe('BAAI/bge-m3');
+    expect((rerankFieldset.querySelectorAll('input')[1] as HTMLInputElement).value).toBe('BAAI/bge-reranker-v2-m3');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('召回效果诊断面板可试跑测试并展示实际检索文本、分数与命中分片', async () => {
+    const { mount, testRecall } = await mountVectorIndexPage();
+
+    const diagPanel = document.querySelector('#vector-index-diagnostics-panel')!;
+    expect(diagPanel).not.toBeNull();
+    const input = diagPanel.querySelector('input') as HTMLInputElement;
+    input.value = '去大礼堂找赫敏';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+
+    const testBtn = Array.from(diagPanel.querySelectorAll('button')).find(b => b.textContent?.includes('测试召回效果'))!;
+    testBtn.click();
+    await new Promise(r => setTimeout(r, 0));
+    await nextTick();
+
+    expect(testRecall).toHaveBeenCalledWith('去大礼堂找赫敏');
+    const text = diagPanel.textContent || '';
+    expect(text).toContain('去大礼堂');
+    expect(text).toContain('赫敏提醒待会儿见。');
+    expect(text).toContain('AM0003');
+    expect(text).toContain('Rerank 0.910');
+    expect(text).toContain('Embedding 0.720');
+    expect(text).toContain('赫敏抱着猫笼走向大礼堂楼梯口。');
+
     mount.__resetAcuV2MountForTests();
   });
 });

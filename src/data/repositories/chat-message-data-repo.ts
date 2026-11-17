@@ -1520,7 +1520,7 @@ export function patchIsolatedTagMetadata_ACU(
     patch: Partial<Pick<IsolationTagData_ACU, 'summaryVectorIndexState' | 'summaryVectorIndexManifest'>>,
     options?: { expectedIndexId?: string },
 ): { changed: boolean; tagData: IsolationTagData_ACU | null } {
-    if (!msg || !isolationKey) return { changed: false, tagData: null };
+    if (!msg || typeof isolationKey !== 'string') return { changed: false, tagData: null };
     if (!isObjectRecord_ACU(patch)) {
         const error = new Error(
             `[metadata-patch] patch 必须是对象：${ISOLATED_TAG_METADATA_PATCH_FORBIDDEN_ACU} isolationKey=${String(isolationKey)}`,
@@ -1560,6 +1560,10 @@ export function patchIsolatedTagMetadata_ACU(
             (error as any).code = ISOLATED_TAG_METADATA_PATCH_CONFLICT_ACU;
             throw error;
         }
+    }
+
+    if (!currentTagData && effectivePatchKeys.every((key) => (patch as Record<string, any>)[key] === null)) {
+        return { changed: false, tagData: null };
     }
 
     // 4. 构造候选：从当前槽 clone 后仅 patch 白名单字段；无槽时构造最小槽。

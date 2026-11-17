@@ -253,6 +253,8 @@ export interface ChatSummaryVectorIndexManifest_ACU {
     skippedRowCount: number;
     embeddingModel: string;
     dimension: number;
+    vectorColumns?: string[];
+    chunkSentenceCount?: number;
     rowsFile: string;
     tombstoneFile: string;
     manifestFile: string;

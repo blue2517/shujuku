@@ -183,3 +183,58 @@ export async function fetchModelsForProfile_ACU(profileId: string): Promise<Fetc
         return { success: false, error: `拉取模型失败: ${e?.message || String(e)}` };
     }
 }
+
+/**
+ * 从 Embedding / Rerank 完整端点 URL 推导用于拉取 /models 的基础 URL 候选列表。
+ */
+export function deriveModelListBaseUrls_ACU(endpoint: string): string[] {
+    const trimmed = String(endpoint || '').trim().replace(/\/+$/, '');
+    if (!trimmed) return [];
+    const stripped = trimmed
+        .replace(/\/(?:embeddings|rerank|reranker|chat\/completions|completions|models)$/i, '')
+        .replace(/\/+$/, '');
+    const candidates: string[] = [];
+    const push = (url: string) => {
+        if (url && !candidates.includes(url)) candidates.push(url);
+    };
+    push(stripped || trimmed);
+    if (stripped && !/\/v\d+$/i.test(stripped)) {
+        push(`${stripped}/v1`);
+    }
+    if (trimmed !== stripped) {
+        push(trimmed);
+    }
+    return candidates;
+}
+
+/**
+ * 从 Embedding 或 Rerank 端点拉取可用模型列表（复用宿主代理规避浏览器 CORS）。
+ */
+export async function fetchModelsFromVectorEndpoint_ACU(endpoint: string, apiKey: string): Promise<FetchModelsResult> {
+    const baseUrls = deriveModelListBaseUrls_ACU(endpoint);
+    if (baseUrls.length === 0) {
+        return { success: false, error: '请先填写端点 URL。' };
+    }
+
+    let firstError = '';
+    for (const baseUrl of baseUrls) {
+        try {
+            const result = await fetchAvailableModels_ACU(baseUrl, apiKey);
+            if (result.success && Array.isArray(result.models) && result.models.length > 0) {
+                return {
+                    success: true,
+                    models: [...result.models].sort(),
+                };
+            }
+            if (!firstError && result.error) {
+                firstError = result.error;
+            }
+        } catch (error: any) {
+            if (!firstError) {
+                firstError = error?.message || String(error);
+            }
+        }
+    }
+
+    return { success: false, error: firstError || '未能拉取到可用模型列表。' };
+}

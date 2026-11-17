@@ -156,8 +156,10 @@ vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({
 
 import {
   archiveSummaryVectorIndexNow_ACU,
+  buildPreparedRows_ACU,
   buildSummaryVectorIndexArchiveScopeKey_ACU,
   flushPendingVectorIndexArchives_ACU,
+  getSummaryTableColumnNames_ACU,
   migrateLegacySummaryVectorIndexToContentAddressed_ACU,
 } from '../../../src/service/vector/summary-vector-index-archive-service';
 
@@ -188,6 +190,8 @@ describe('summary-vector-index-archive-service pending 归档', () => {
         snapshotMessageId: options.snapshotMessageId,
         sourceTableKey: options.sourceTableKey,
         sourceTableName: options.sourceTableName,
+        ...(Array.isArray(options.vectorColumns) && options.vectorColumns.length > 0 ? { vectorColumns: options.vectorColumns } : {}),
+        ...(Number.isFinite(Number(options.chunkSentenceCount)) && Number(options.chunkSentenceCount) > 0 ? { chunkSentenceCount: Number(options.chunkSentenceCount) } : {}),
         rowCount: options.rows.length,
         chunkCount: options.chunks.length,
         skippedRowCount: options.skippedRowCount,
@@ -948,5 +952,81 @@ describe('summary-vector-index-archive-service pending 归档', () => {
     expect(mockPersistSummaryVectorIndexSnapshot).not.toHaveBeenCalled();
   });
 
+  it('自主选择向量化列时仅将所选列拼入 vectorSourceText，并在列配置变化后触发全量重建', async () => {
+    const customTable = {
+      name: '纪要表',
+      content: [
+        ['row_id', '编码索引', '时间跨度', '概览', '纪要', '重要对话'],
+        ['1', 'AM0001', '白天', '走廊告别', '赫敏说完待会大礼堂见后离开。', '「把克鲁克山关进猫笼里」'],
+      ],
+    };
+    mockCurrentJsonTableDataRef.value = { sheet_summary: customTable };
+    mockChat.length = 0;
+    mockChat.push({ is_user: false, mes: 'AI回复', id: 'msg-1' });
+
+    expect(getSummaryTableColumnNames_ACU()).toEqual(['编码索引', '时间跨度', '概览', '纪要', '重要对话']);
+
+    const prepared = buildPreparedRows_ACU(customTable, 'sheet_summary', ['纪要', '重要对话']);
+    expect(prepared.error).toBe('');
+    expect(prepared.rows).toHaveLength(1);
+    expect(prepared.rows[0].vectorSourceText).toContain('[纪要] 赫敏说完待会大礼堂见后离开。');
+    expect(prepared.rows[0].vectorSourceText).toContain('[重要对话] 「把克鲁克山关进猫笼里」');
+    expect(prepared.rows[0].vectorSourceText).not.toContain('走廊告别');
+
+    const baseCfg = {
+      ...mockGetEffectiveSummaryVectorIndexConfig(),
+      summaryIndexVectorColumns: ['概览'],
+    };
+    mockGetEffectiveSummaryVectorIndexConfig.mockReturnValue(baseCfg);
+    const first = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0 });
+    expect(first.success).toBe(true);
+    expect(first.skipped).toBe(false);
+    expect(mockCreateEmbeddings).toHaveBeenCalledTimes(1);
+
+    // 切换向量化列到 纪要+重要对话，即使未传 force 也必须重算并更新 manifest.vectorColumns
+    mockGetEffectiveSummaryVectorIndexConfig.mockReturnValue({
+      ...baseCfg,
+      summaryIndexVectorColumns: ['纪要', '重要对话'],
+    });
+    const second = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0 });
+    expect(second.success).toBe(true);
+    expect(second.skipped).toBe(false);
+    expect(mockCreateEmbeddings).toHaveBeenCalledTimes(2);
+    const persistedManifest = mockPersistSummaryVectorIndexSnapshot.mock.calls.at(-1)?.[0];
+    expect(persistedManifest.vectorColumns).toEqual(['纪要', '重要对话']);
+  });
+
+  it('分块句数变化时自动触发全量重切分与重算向量', async () => {
+    const customTable = {
+      name: '纪要表',
+      content: [
+        ['row_id', '编码索引', '时间跨度', '概览', '纪要'],
+        ['1', 'AM0001', '白天', '第一句。第二句。第三句。第四句。', '第五句。第六句。'],
+      ],
+    };
+    mockCurrentJsonTableDataRef.value = { sheet_summary: customTable };
+    mockChat.length = 0;
+    mockChat.push({ is_user: false, mes: 'AI回复', id: 'msg-1' });
+
+    const baseCfg = {
+      ...mockGetEffectiveSummaryVectorIndexConfig(),
+      summaryIndexVectorColumns: ['概览', '纪要'],
+      summaryIndexChunkSentenceCount: 2,
+    };
+    mockGetEffectiveSummaryVectorIndexConfig.mockReturnValue(baseCfg);
+    const first = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0 });
+    expect(first.success).toBe(true);
+    expect(first.chunkCount).toBe(3);
+
+    mockGetEffectiveSummaryVectorIndexConfig.mockReturnValue({
+      ...baseCfg,
+      summaryIndexChunkSentenceCount: 6,
+    });
+    const second = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0 });
+    expect(second.success).toBe(true);
+    expect(second.skipped).toBe(false);
+    expect(second.chunkCount).toBe(1);
+    expect(mockCreateEmbeddings).toHaveBeenCalledTimes(2);
+  });
 
 });

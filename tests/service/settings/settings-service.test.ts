@@ -167,7 +167,8 @@ vi.mock('../../../src/shared/defaults', () => ({
     recentFixedInjectCount: 50,
     summaryIndexV2WriteEnabled: true,
     summaryIndexV2WriteScopeAllowlist: [],
-    summaryPromptGroup: []
+    summaryPromptGroup: [],
+    keywordPromptGroup: []
   },
   buildDefaultPlotWorldbookConfig_ACU: () => ({ source: 'character', manualSelection: [] }),
   buildDefaultAgentWorldbookPromptTemplates_ACU: () => ({
@@ -266,13 +267,17 @@ vi.mock('../../../src/shared/json-helpers', () => ({
   },
 }));
 
-vi.mock('../../../src/shared/utils', () => ({
-  deepMerge_ACU: (target: any, source: any) => ({ ...target, ...source }),
-  ensureSheetOrderNumbers_ACU: mockEnsureSheetOrderNumbers,
-  logDebug_ACU: vi.fn(),
-  logError_ACU: vi.fn(),
-  logWarn_ACU: vi.fn(),
-}));
+vi.mock('../../../src/shared/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/shared/utils')>();
+  return {
+    ...actual,
+    deepMerge_ACU: (target: any, source: any) => ({ ...target, ...source }),
+    ensureSheetOrderNumbers_ACU: mockEnsureSheetOrderNumbers,
+    logDebug_ACU: vi.fn(),
+    logError_ACU: vi.fn(),
+    logWarn_ACU: vi.fn(),
+  };
+});
 
 import {
   saveSettings_ACU,
@@ -281,9 +286,14 @@ import {
   applyTemplateScopeForCurrentChat_ACU,
   persistCurrentTemplatePresetName_ACU,
   setZeroTkOccupyMode_ACU,
+  setSummaryVectorIndexMode_ACU,
   applyCombinedSettingsImport_ACU,
   _set_settingsStorageReadyForSave_ACU,
 } from '../../../src/service/settings/settings-service';
+import {
+  getLatestSummaryVectorRecallSnapshot_ACU,
+  setLatestSummaryVectorRecallSnapshot_ACU,
+} from '../../../src/service/vector/summary-vector-recall-cache';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -824,4 +834,25 @@ describe('loadSettings_ACU', () => {
       .toBe('test-template-assistant-prompt-force-default');
   });
 
+});
+
+describe('setSummaryVectorIndexMode_ACU', () => {
+  it('关闭交火开关后立即清空内存中的初筛缓存', () => {
+    mockGetConfigStorage.mockReturnValue({ _isTavern: true });
+    mockGetCurrentWorldbookConfig.mockReturnValue({ zeroTkOccupyMode: false, summaryVectorIndexModeEnabled: true });
+    setLatestSummaryVectorRecallSnapshot_ACU({
+      chatKey: 'test-char',
+      isolationKey: '',
+      indexCodes: ['AM0001', 'AM0002'],
+      rowKeys: ['r1', 'r2'],
+      updatedAt: Date.now(),
+    });
+    expect(getLatestSummaryVectorRecallSnapshot_ACU('test-char', '')?.indexCodes).toEqual(['AM0001', 'AM0002']);
+
+    setSummaryVectorIndexMode_ACU(false);
+
+    expect(mockSettings.summaryVectorIndexModeDefault).toBe(false);
+    expect(mockGlobalMeta.summaryVectorIndexModeGlobal).toBe(false);
+    expect(getLatestSummaryVectorRecallSnapshot_ACU('test-char', '')).toBeNull();
+  });
 });

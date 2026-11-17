@@ -48,10 +48,18 @@ import {
     findSummaryTable_ACU,
     type SummaryVectorArchivePreparedRow_ACU,
 } from './summary-vector-index-archive-service';
+import {
+    clearLatestSummaryVectorRecallSnapshot_ACU,
+    setLatestSummaryVectorRecallDiagnostics_ACU,
+    setLatestSummaryVectorRecallSnapshot_ACU,
+    type SummaryVectorRecallDiagnosticItem_ACU,
+    type SummaryVectorRecallDiagnostics_ACU,
+} from './summary-vector-recall-cache';
 
 interface SummaryVectorIndexRuntimeOptions_ACU {
     userInput?: string;
     source?: string;
+    dryRun?: boolean;
 }
 
 export interface SummaryVectorIndexRuntimeResult_ACU {
@@ -61,9 +69,11 @@ export interface SummaryVectorIndexRuntimeResult_ACU {
     keywordCount?: number;
     candidateCount?: number;
     injectedCount?: number;
+    selectedIndexCodes?: string[];
     denseCandidateCount?: number;
     sparseCandidateCount?: number;
     fusionCandidateCount?: number;
+    diagnostics?: SummaryVectorRecallDiagnostics_ACU;
 }
 
 interface RankedSummaryCandidate_ACU extends SummaryHybridCandidate_ACU {
@@ -77,7 +87,16 @@ interface RankedSummaryCandidate_ACU extends SummaryHybridCandidate_ACU {
 // 不参与 rerank / 排序），只提供 row 用于覆盖内容输出；ranked 项来自 dense/sparse/fusion。
 type SummaryIndexSelectedCandidate_ACU =
     | { kind: 'recent_fixed'; row: ChatSummaryVectorIndexRow_ACU }
-    | { kind: 'ranked'; chunk: ChatSummaryVectorIndexChunk_ACU; row: ChatSummaryVectorIndexRow_ACU; score: number; rerankScore?: number };
+    | {
+        kind: 'ranked';
+        chunk: ChatSummaryVectorIndexChunk_ACU;
+        row: ChatSummaryVectorIndexRow_ACU;
+        score: number;
+        denseScore?: number;
+        bm25Score?: number;
+        rrfScore?: number;
+        rerankScore?: number;
+    };
 
 let lastRuntimeSignature_ACU = '';
 let lastRuntimeAt_ACU = 0;
@@ -87,14 +106,118 @@ function normalizeText_ACU(value: any): string {
     return String(value ?? '').trim();
 }
 
-function buildRecentContext_ACU(pairCount: number): string {
+function escapeRegExpLocal_ACU(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 剥离用户指定标签及其内部文本（如 `<标签触发>...</标签触发>`）。
+ */
+export function stripQueryTags_ACU(text: string, stripTagsRaw: string = ''): string {
+    let result = String(text ?? '');
+    if (!result) return '';
+    const tagNames = Array.from(new Set(
+        String(stripTagsRaw || '')
+            .split(/[,，\n;；|\s]+/)
+            .map((token) => token.replace(/[<>/]/g, '').trim())
+            .filter(Boolean),
+    ));
+    for (const tagName of tagNames) {
+        const escaped = escapeRegExpLocal_ACU(tagName);
+        const pairedPattern = new RegExp(`<${escaped}(?:\\s[^>]*)?>[\\s\\S]*?<\\/${escaped}>`, 'gi');
+        result = result.replace(pairedPattern, '');
+        const unclosedTrailingPattern = new RegExp(`<${escaped}(?:\\s[^>]*)?>[\\s\\S]*$`, 'gi');
+        result = result.replace(unclosedTrailingPattern, '');
+        const selfClosingPattern = new RegExp(`<${escaped}(?:\\s[^>]*)?\\/>`, 'gi');
+        result = result.replace(selfClosingPattern, '');
+    }
+    return result.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * 从文本末尾截取尽量接近目标字数的完整句子，绝不从句中截断。
+ */
+export function extractCompleteTailSentences_ACU(text: string, targetChars: number): string {
+    const normalized = String(text ?? '').replace(/\r\n/g, '\n').trim();
+    const limit = Math.max(1, Math.floor(Number(targetChars) || 400));
+    if (!normalized || normalized.length <= limit) {
+        return normalized;
+    }
+
+    const rawStart = normalized.length - limit;
+    const boundaryRegex = /(?:[。！？!?]+|(?<!\d)\.(?!\d)(?=\s|$))[」』”’）】》"'\])]*|\n+/g;
+    const ends: number[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = boundaryRegex.exec(normalized)) !== null) {
+        const endPos = match.index + match[0].length;
+        if (endPos < normalized.length) {
+            ends.push(endPos);
+        }
+    }
+
+    if (ends.length === 0) {
+        if (normalized.length <= Math.max(limit * 2, 1200)) {
+            return normalized;
+        }
+        return normalized.slice(rawStart).trim();
+    }
+
+    let beforeStart = 0;
+    let atOrAfterStart = -1;
+    for (const pos of ends) {
+        if (pos <= rawStart) {
+            beforeStart = pos;
+        } else {
+            atOrAfterStart = pos;
+            break;
+        }
+    }
+
+    const beforeChunk = normalized.slice(beforeStart).trim();
+    if (beforeStart > 0 && beforeChunk.length <= Math.ceil(limit * 1.35)) {
+        return beforeChunk;
+    }
+    if (atOrAfterStart > 0 && atOrAfterStart < normalized.length) {
+        const afterChunk = normalized.slice(atOrAfterStart).trim();
+        if (afterChunk) {
+            return afterChunk;
+        }
+    }
+    if (beforeChunk.length <= Math.max(limit * 2, 1200)) {
+        return beforeChunk;
+    }
+    return normalized.slice(rawStart).trim();
+}
+
+/**
+ * 关闭关键词 AI 生成时，构造直接检索文本：最新 AI 回复末尾完整句（已剥离标签） + 用户原始输入。
+ */
+export function buildDirectQueryText_ACU(config: any, userInput: string): string {
+    const chat = getChatArray_ACU();
+    let latestAiMessage = '';
+    if (Array.isArray(chat)) {
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+            const msg = chat[i];
+            if (msg && !msg.is_user && typeof msg.mes === 'string' && msg.mes.trim()) {
+                latestAiMessage = msg.mes;
+                break;
+            }
+        }
+    }
+    const stripped = stripQueryTags_ACU(latestAiMessage, String(config?.queryStripTags || ''));
+    const tailText = extractCompleteTailSentences_ACU(stripped, Number(config?.queryTailCharLimit) || 400);
+    return tailText ? `${tailText}\n${userInput}` : userInput;
+}
+
+function buildRecentContext_ACU(pairCount: number, stripTagsRaw: string = ''): string {
     const chat = getChatArray_ACU();
     if (!Array.isArray(chat) || chat.length === 0) return '';
     const limit = Math.max(2, Math.min(chat.length, Math.max(1, pairCount) * 2 + 2));
     return chat.slice(Math.max(0, chat.length - limit))
         .map((message: any) => {
             const role = message?.is_user ? '用户' : 'AI';
-            const text = normalizeText_ACU(message?.mes).replace(/<[^>]+>/g, '').trim();
+            const cleaned = stripQueryTags_ACU(normalizeText_ACU(message?.mes), stripTagsRaw);
+            const text = cleaned.replace(/<[^>]+>/g, '').trim();
             return text ? `${role}: ${text}` : '';
         })
         .filter(Boolean)
@@ -155,7 +278,7 @@ function parseKeywords_ACU(text: string): string[] {
 }
 
 async function generateKeywords_ACU(config: any, userInput: string): Promise<string[]> {
-    const recentContext = buildRecentContext_ACU(config.keywordContextPairCount || 1);
+    const recentContext = buildRecentContext_ACU(config.keywordContextPairCount || 1, String(config?.queryStripTags || ''));
     const messages = renderKeywordPromptMessages_ACU(config.keywordPromptGroup || [], { recentContext, userInput });
     if (messages.length === 0) return [];
     const attempts = Math.max(1, Number(config.keywordGenerationMaxAttempts) || 1);
@@ -201,10 +324,18 @@ function cosineSimilarity_ACU(left: number[], right: number[], leftNorm: number)
     return dot / (leftNorm * Math.sqrt(rightNorm));
 }
 
-async function rerankCandidates_ACU(config: any, query: string, candidates: RankedSummaryCandidate_ACU[]): Promise<RankedSummaryCandidate_ACU[]> {
+interface RerankExecutionResult_ACU {
+    candidates: RankedSummaryCandidate_ACU[];
+    status: 'applied' | 'skipped' | 'failed';
+    error?: string;
+}
+
+async function rerankCandidates_ACU(config: any, query: string, candidates: RankedSummaryCandidate_ACU[]): Promise<RerankExecutionResult_ACU> {
     const endpoint = normalizeText_ACU(config.rerankEndpoint);
     const model = normalizeText_ACU(config.rerankModel);
-    if (!endpoint || !model || candidates.length === 0) return candidates;
+    if (!endpoint || !model || candidates.length === 0) {
+        return { candidates, status: 'skipped' };
+    }
     try {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         const apiKey = normalizeText_ACU(config.rerankApiKey);
@@ -230,12 +361,14 @@ async function rerankCandidates_ACU(config: any, query: string, candidates: Rank
             const score = Number(item?.relevance_score ?? item?.score ?? item?.rerank_score);
             if (Number.isFinite(index) && Number.isFinite(score)) byIndex.set(index, score);
         });
-        return candidates
+        const sorted = candidates
             .map((candidate, index) => ({ ...candidate, rerankScore: byIndex.get(index) ?? candidate.score }))
             .sort((left, right) => (right.rerankScore ?? right.score) - (left.rerankScore ?? left.score));
+        return { candidates: sorted, status: 'applied' };
     } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error || 'Rerank 请求失败');
         logWarn_ACU('[交火模式纪要索引] Rerank 失败，回退到 Embedding 排序:', error);
-        return candidates;
+        return { candidates, status: 'failed', error: errorMessage };
     }
 }
 
@@ -303,10 +436,10 @@ interface LiveSummaryVectorRows_ACU {
     byRowKey: Map<string, SummaryVectorArchivePreparedRow_ACU>;
 }
 
-function buildLiveSummaryVectorRows_ACU(): LiveSummaryVectorRows_ACU | null {
+function buildLiveSummaryVectorRows_ACU(vectorColumns?: string[]): LiveSummaryVectorRows_ACU | null {
     const selected = findSummaryTable_ACU();
     if (!selected?.summaryKey || !selected.table) return null;
-    const prepared = buildPreparedRows_ACU(selected.table, selected.summaryKey);
+    const prepared = buildPreparedRows_ACU(selected.table, selected.summaryKey, vectorColumns);
     if (prepared.error) {
         logWarn_ACU('[交火模式纪要索引] 实时纪要表解析失败，跳过发送前对账:', prepared.error);
         return null;
@@ -578,23 +711,91 @@ async function tryRealignSummaryVectorIndexPointerFromDisk_ACU(params: {
     return alignedState;
 }
 
+function buildDiagnosticItems_ACU(selected: SummaryIndexSelectedCandidate_ACU[]): SummaryVectorRecallDiagnosticItem_ACU[] {
+    return selected.map((item) => {
+        const summarySource = normalizeText_ACU(item.row.summary || item.row.vectorSourceText || '');
+        const summaryPreview = summarySource.length > 90 ? `${summarySource.slice(0, 90)}…` : summarySource;
+        if (item.kind === 'recent_fixed') {
+            return {
+                indexCode: String(item.row.indexCode || ''),
+                rowKey: String(item.row.rowKey || ''),
+                kind: 'recent_fixed',
+                summaryPreview,
+            };
+        }
+        const chunkText = normalizeText_ACU(item.chunk?.text || '');
+        return {
+            indexCode: String(item.row.indexCode || ''),
+            rowKey: String(item.row.rowKey || ''),
+            kind: 'ranked',
+            summaryPreview,
+            matchedChunkText: chunkText.length > 220 ? `${chunkText.slice(0, 220)}…` : chunkText,
+            denseScore: item.denseScore,
+            bm25Score: item.bm25Score,
+            rrfScore: item.rrfScore,
+            rerankScore: item.rerankScore,
+            score: item.score,
+        };
+    });
+}
+
 // T5：query embedding 失败时的降级路径 —— 仅注入最近固定行，不依赖向量检索。
 // 仅在 recentFixedRows 非空时调用；调用方负责确认 recentFixedRows.length > 0。
-async function injectRecentFixedRowsOnly_ACU(recentFixedRows: ChatSummaryVectorIndexRow_ACU[]): Promise<SummaryVectorIndexRuntimeResult_ACU> {
+async function injectRecentFixedRowsOnly_ACU(
+    recentFixedRows: ChatSummaryVectorIndexRow_ACU[],
+    scopeMeta: { chatKey?: string; isolationKey?: string } = {},
+    options: { dryRun?: boolean; source?: string; userInput?: string; queryMode?: 'keyword_ai' | 'direct'; queryText?: string; keywords?: string[]; startedAt?: number } = {},
+): Promise<SummaryVectorIndexRuntimeResult_ACU> {
     const selected = recentFixedRows
         .map((row): SummaryIndexSelectedCandidate_ACU => ({ kind: 'recent_fixed', row }))
         .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
-    const content = buildSummaryIndexOverwriteContent_ACU(selected);
-    await upsertOriginalSummaryIndexEntry_ACU(content);
+    const selectedIndexCodes = selected.map((item) => item.row.indexCode).filter(Boolean);
+    if (!options.dryRun) {
+        const content = buildSummaryIndexOverwriteContent_ACU(selected);
+        await upsertOriginalSummaryIndexEntry_ACU(content);
+        setLatestSummaryVectorRecallSnapshot_ACU({
+            chatKey: String(scopeMeta.chatKey || ''),
+            isolationKey: String(scopeMeta.isolationKey || ''),
+            indexCodes: selectedIndexCodes,
+            rowKeys: selected.map((item) => item.row.rowKey).filter(Boolean),
+            updatedAt: Date.now(),
+        });
+    }
+    const diagnostics: SummaryVectorRecallDiagnostics_ACU = {
+        chatKey: String(scopeMeta.chatKey || ''),
+        isolationKey: String(scopeMeta.isolationKey || ''),
+        source: String(options.source || 'unknown'),
+        dryRun: options.dryRun === true,
+        success: true,
+        skipped: false,
+        reason: 'query_embedding_failed_recent_fixed_only',
+        userInput: String(options.userInput || ''),
+        queryMode: options.queryMode || 'direct',
+        queryText: String(options.queryText || ''),
+        keywords: Array.isArray(options.keywords) ? [...options.keywords] : [],
+        denseCandidateCount: 0,
+        sparseCandidateCount: 0,
+        fusionCandidateCount: 0,
+        rerankStatus: 'skipped',
+        recentFixedCount: selected.length,
+        rankedCount: 0,
+        totalSelectedCount: selected.length,
+        durationMs: Math.max(0, Date.now() - (options.startedAt || Date.now())),
+        updatedAt: Date.now(),
+        items: buildDiagnosticItems_ACU(selected),
+    };
+    setLatestSummaryVectorRecallDiagnostics_ACU(diagnostics);
     return {
         success: true,
         reason: 'query_embedding_failed_recent_fixed_only',
         keywordCount: 0,
         candidateCount: 0,
         injectedCount: selected.length,
+        selectedIndexCodes,
         denseCandidateCount: 0,
         sparseCandidateCount: 0,
         fusionCandidateCount: 0,
+        diagnostics,
     };
 }
 
@@ -602,35 +803,76 @@ async function injectRecentFixedRowsOnly_ACU(recentFixedRows: ChatSummaryVectorI
 export async function processSummaryVectorIndexBeforeGeneration_ACU(
     options: SummaryVectorIndexRuntimeOptions_ACU = {},
 ): Promise<SummaryVectorIndexRuntimeResult_ACU> {
+    const startedAt = Date.now();
+    const dryRun = options.dryRun === true;
+    const source = String(options.source || 'unknown');
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const globalEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true;
-    if (!globalEnabled) {
+    if (!dryRun && !globalEnabled) {
+        clearLatestSummaryVectorRecallSnapshot_ACU();
         logDebug_ACU(`[交火模式纪要索引] 全局开关未启用，跳过发送前处理。worldbookProjection=${worldbookConfig.summaryVectorIndexModeEnabled === true}`);
         return { success: false, skipped: true, reason: 'summary_vector_index_disabled' };
     }
     const userInput = normalizeText_ACU(options.userInput);
     if (!userInput) return { success: false, skipped: true, reason: 'empty_user_input' };
-    const signature = `${options.source || 'unknown'}:${userInput}`;
-    if (signature === lastRuntimeSignature_ACU && Date.now() - lastRuntimeAt_ACU <= SUMMARY_VECTOR_INDEX_RUNTIME_DEDUPE_MS_ACU) {
-        return { success: true, skipped: true, reason: 'deduped' };
+    if (!dryRun) {
+        const signature = `${source}:${userInput}`;
+        if (signature === lastRuntimeSignature_ACU && Date.now() - lastRuntimeAt_ACU <= SUMMARY_VECTOR_INDEX_RUNTIME_DEDUPE_MS_ACU) {
+            return { success: true, skipped: true, reason: 'deduped' };
+        }
+        lastRuntimeSignature_ACU = signature;
+        lastRuntimeAt_ACU = Date.now();
     }
-    lastRuntimeSignature_ACU = signature;
-    lastRuntimeAt_ACU = Date.now();
 
     const config = getEffectiveSummaryVectorIndexConfig_ACU();
+    const queryMode: 'keyword_ai' | 'direct' = config.keywordGenerationEnabled === false ? 'direct' : 'keyword_ai';
+    const recordAndReturn = (
+        partialResult: SummaryVectorIndexRuntimeResult_ACU,
+        diagPartial: Partial<SummaryVectorRecallDiagnostics_ACU> = {},
+    ): SummaryVectorIndexRuntimeResult_ACU => {
+        const diagnostics: SummaryVectorRecallDiagnostics_ACU = {
+            chatKey: String(diagPartial.chatKey || ''),
+            isolationKey: String(diagPartial.isolationKey || ''),
+            source,
+            dryRun,
+            success: partialResult.success,
+            skipped: partialResult.skipped === true,
+            reason: partialResult.reason,
+            userInput,
+            queryMode,
+            queryText: String(diagPartial.queryText || ''),
+            keywords: Array.isArray(diagPartial.keywords) ? [...diagPartial.keywords] : [],
+            denseCandidateCount: partialResult.denseCandidateCount ?? 0,
+            sparseCandidateCount: partialResult.sparseCandidateCount ?? 0,
+            fusionCandidateCount: partialResult.fusionCandidateCount ?? 0,
+            rerankStatus: diagPartial.rerankStatus || 'skipped',
+            rerankError: diagPartial.rerankError,
+            recentFixedCount: diagPartial.recentFixedCount ?? 0,
+            rankedCount: diagPartial.rankedCount ?? 0,
+            totalSelectedCount: partialResult.injectedCount ?? 0,
+            durationMs: Math.max(0, Date.now() - startedAt),
+            updatedAt: Date.now(),
+            items: Array.isArray(diagPartial.items) ? diagPartial.items : [],
+        };
+        setLatestSummaryVectorRecallDiagnostics_ACU(diagnostics);
+        return { ...partialResult, diagnostics };
+    };
+
     const validation = validateSummaryVectorIndexConfig_ACU(config);
     if (!validation.valid) {
+        if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
         logWarn_ACU('[交火模式纪要索引] 配置无效，跳过发送前注入:', validation.errors.join('; '));
-        return { success: false, skipped: true, reason: 'invalid_config' };
+        return recordAndReturn({ success: false, skipped: true, reason: 'invalid_config' });
     }
 
     const snapshot = getLatestSummaryVectorIndexSnapshotState_ACU();
     let state = snapshot?.summaryVectorIndexState || null;
     const latestLayer = snapshot?.layers?.[0] || null;
     if (!state) {
-        return { success: false, skipped: true, reason: 'no_index_state' };
+        if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
+        return recordAndReturn({ success: false, skipped: true, reason: 'no_index_state' });
     }
-    const liveRows = buildLiveSummaryVectorRows_ACU();
+    const liveRows = buildLiveSummaryVectorRows_ACU(config.summaryIndexVectorColumns);
     const activeRowKeys = new Set(state.manifest?.snapshot?.activeRowKeys || []);
     let rows: ChatSummaryVectorIndexRow_ACU[] = Array.isArray(state.rows)
         ? state.rows.filter((row: ChatSummaryVectorIndexRow_ACU) => row.status !== 'removed' && (activeRowKeys.size === 0 || activeRowKeys.has(row.rowKey)))
@@ -724,27 +966,38 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     staleRealignNeeded = staleRealignNeeded || reconciledChunks.changed;
     if (staleRealignNeeded) {
         logWarn_ACU('[交火模式纪要索引] 实时纪要表与现有索引不一致；停止使用旧快照并交由 UI 走“立即构建”普通路径重建。');
-        return { success: false, skipped: true, reason: 'runtime_stale_rows_rebuild_required' };
+        return recordAndReturn({ success: false, skipped: true, reason: 'runtime_stale_rows_rebuild_required' });
     }
     if (rows.length < config.summaryIndexKeywordMinRows) {
-        return { success: false, skipped: true, reason: 'below_min_rows' };
+        if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
+        return recordAndReturn({ success: false, skipped: true, reason: 'below_min_rows' });
     }
     if (chunks.length === 0) {
-        return { success: false, skipped: true, reason: 'no_chunks' };
+        if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
+        return recordAndReturn({ success: false, skipped: true, reason: 'no_chunks' });
     }
 
     const rowByKey = new Map(rows.map((row) => [row.rowKey, row]));
+    const recallScopeMeta = {
+        chatKey: String(state.manifest?.chatKey || ''),
+        isolationKey: normalizeSummaryVectorIsolationKey_ACU(latestLayer?.isolationKey ?? state.manifest?.isolationKey),
+    };
 
-    // ── 最近 X 条固定注入：按 rowOrder 降序取最近 X 行 ──
-    const recentFixedCount = Math.max(0, Math.min(
-        config.summaryIndexRecentFixedInjectCount || 0,
-        rows.length,
-    ));
+    // ── 最近 X 条固定注入 + 共享总上限配额 ──
+    const sharedTotalLimit = Math.max(0, Math.floor(Number(config.summaryIndexSharedTotalLimit) || 0));
+    const rawRecentFixedLimit = Math.max(0, config.summaryIndexRecentFixedInjectCount || 0);
+    const effectiveRecentFixedLimit = sharedTotalLimit > 0
+        ? Math.min(rawRecentFixedLimit, sharedTotalLimit)
+        : rawRecentFixedLimit;
+    const recentFixedCount = Math.min(effectiveRecentFixedLimit, rows.length);
     const rowsSortedByOrderDesc = [...rows].sort(
         (left, right) => (Number(right.rowOrder) || 0) - (Number(left.rowOrder) || 0),
     );
     const recentFixedRows = rowsSortedByOrderDesc.slice(0, recentFixedCount);
     const recentFixedRowKeys = new Set(recentFixedRows.map((row) => row.rowKey));
+    const effectiveVectorTopK = sharedTotalLimit > 0
+        ? Math.min(config.topK, Math.max(0, sharedTotalLimit - recentFixedRows.length))
+        : config.topK;
     // 较早的行（不参与排序的候选池）
     const olderRows = rows.filter((row) => !recentFixedRowKeys.has(row.rowKey));
 
@@ -755,8 +1008,12 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     let queryText = '';
     let queryVector: number[] = [];
     try {
-        keywords = await generateKeywords_ACU(config, userInput);
-        queryText = [userInput, keywords.join('，')].filter(Boolean).join('\n关键词：');
+        if (config.keywordGenerationEnabled === false) {
+            queryText = buildDirectQueryText_ACU(config, userInput);
+        } else {
+            keywords = await generateKeywords_ACU(config, userInput);
+            queryText = [userInput, keywords.join('，')].filter(Boolean).join('\n关键词：');
+        }
         const embeddings = await createEmbeddings_ACU({
             endpoint: config.embeddingEndpoint,
             apiKey: config.embeddingApiKey,
@@ -767,14 +1024,34 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         if (queryVector.length === 0) {
             if (recentFixedRows.length > 0) {
                 logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，降级为仅注入最近固定行:', userInput);
-                return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
+                return await injectRecentFixedRowsOnly_ACU(recentFixedRows, recallScopeMeta, {
+                    dryRun,
+                    source,
+                    userInput,
+                    queryMode,
+                    queryText,
+                    keywords,
+                    startedAt,
+                });
             }
-            return { success: false, skipped: true, reason: 'empty_query_embedding' };
+            if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
+            return recordAndReturn(
+                { success: false, skipped: true, reason: 'empty_query_embedding' },
+                { ...recallScopeMeta, queryText, keywords },
+            );
         }
     } catch (error) {
         if (recentFixedRows.length > 0) {
             logWarn_ACU('[交火模式纪要索引] query embedding 失败，降级为仅注入最近固定行，继续原始生成:', error);
-            return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
+            return await injectRecentFixedRowsOnly_ACU(recentFixedRows, recallScopeMeta, {
+                dryRun,
+                source,
+                userInput,
+                queryMode,
+                queryText,
+                keywords,
+                startedAt,
+            });
         }
         throw error;
     }
@@ -825,17 +1102,33 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     );
 
     if (candidates.length === 0 && recentFixedRows.length === 0) {
-        return { success: false, skipped: true, reason: 'no_candidates', keywordCount: keywords.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length };
+        if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
+        return recordAndReturn(
+            { success: false, skipped: true, reason: 'no_candidates', keywordCount: keywords.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length },
+            { ...recallScopeMeta, queryText, keywords },
+        );
     }
 
     // Rerank 只处理较早行的候选
-    const reranked = candidates.length > 0
+    const rerankResult = (candidates.length > 0 && effectiveVectorTopK > 0)
         ? await rerankCandidates_ACU(config, queryText, candidates)
-        : [];
+        : { candidates: [] as RankedSummaryCandidate_ACU[], status: 'skipped' as const };
+    const reranked = rerankResult.candidates;
     const selectedByRow = new Map<string, SummaryIndexSelectedCandidate_ACU>();
     for (const candidate of reranked) {
-        if (!selectedByRow.has(candidate.row.rowKey)) selectedByRow.set(candidate.row.rowKey, { kind: 'ranked', chunk: candidate.chunk, row: candidate.row, score: candidate.score, rerankScore: candidate.rerankScore });
-        if (selectedByRow.size >= config.topK) break;
+        if (selectedByRow.size >= effectiveVectorTopK) break;
+        if (!selectedByRow.has(candidate.row.rowKey)) {
+            selectedByRow.set(candidate.row.rowKey, {
+                kind: 'ranked',
+                chunk: candidate.chunk,
+                row: candidate.row,
+                score: candidate.score,
+                denseScore: candidate.denseScore,
+                bm25Score: candidate.bm25Score,
+                rrfScore: candidate.rrfScore,
+                rerankScore: candidate.rerankScore,
+            });
+        }
     }
 
     // 合并：最近固定行 + TopK 排序行（去重，固定行优先）
@@ -847,13 +1140,69 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     const selected = Array.from(selectedByRow.values())
         .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
     if (selected.length === 0) {
-        return { success: false, skipped: true, reason: 'no_selected_rows', keywordCount: keywords.length, candidateCount: candidates.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length };
+        if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
+        return recordAndReturn(
+            { success: false, skipped: true, reason: 'no_selected_rows', keywordCount: keywords.length, candidateCount: candidates.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length },
+            { ...recallScopeMeta, queryText, keywords, rerankStatus: rerankResult.status, rerankError: rerankResult.error },
+        );
     }
 
-    const content = buildSummaryIndexOverwriteContent_ACU(selected);
-    await upsertOriginalSummaryIndexEntry_ACU(content);
-    logDebug_ACU(
-        `[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`,
+    const selectedIndexCodes = selected.map((item) => item.row.indexCode).filter(Boolean);
+    if (!dryRun) {
+        const content = buildSummaryIndexOverwriteContent_ACU(selected);
+        await upsertOriginalSummaryIndexEntry_ACU(content);
+        setLatestSummaryVectorRecallSnapshot_ACU({
+            chatKey: recallScopeMeta.chatKey,
+            isolationKey: recallScopeMeta.isolationKey,
+            indexCodes: selectedIndexCodes,
+            rowKeys: selected.map((item) => item.row.rowKey).filter(Boolean),
+            updatedAt: Date.now(),
+        });
+        logDebug_ACU(
+            `[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`,
+        );
+    }
+    return recordAndReturn(
+        { success: true, keywordCount: keywords.length, candidateCount: candidates.length, injectedCount: selected.length, selectedIndexCodes, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length },
+        {
+            ...recallScopeMeta,
+            queryText,
+            keywords,
+            rerankStatus: rerankResult.status,
+            rerankError: rerankResult.error,
+            recentFixedCount: recentFixedRows.length,
+            rankedCount: selected.length - recentFixedRows.length,
+            items: buildDiagnosticItems_ACU(selected),
+        },
     );
-    return { success: true, keywordCount: keywords.length, candidateCount: candidates.length, injectedCount: selected.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length };
+}
+
+/**
+ * UI 试跑召回诊断（Dry-Run）：不写世界书、不污染线上初筛缓存。
+ */
+export async function testSummaryVectorRecallNow_ACU(userInput?: string): Promise<SummaryVectorIndexRuntimeResult_ACU> {
+    let resolvedInput = normalizeText_ACU(userInput);
+    if (!resolvedInput) {
+        const chat = getChatArray_ACU();
+        if (Array.isArray(chat)) {
+            for (let index = chat.length - 1; index >= 0; index -= 1) {
+                const msg = chat[index];
+                if (msg?.is_user) {
+                    const text = normalizeText_ACU(msg.mes);
+                    if (text) {
+                        resolvedInput = text;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (!resolvedInput) {
+        resolvedInput = '剧情继续推进';
+    }
+    return processSummaryVectorIndexBeforeGeneration_ACU({
+        userInput: resolvedInput,
+        source: 'ui-dry-run',
+        dryRun: true,
+    });
 }

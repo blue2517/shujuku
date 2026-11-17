@@ -282,9 +282,18 @@ vi.mock('../../../../src/service/runtime/plot-runtime/plot-data-format', () => (
   formatTableDataForLLM_ACU: vi.fn(),
   formatOutlineTableForPlot_ACU: mockFormatOutlineTableForPlot,
   formatSummaryIndexForPlot_ACU: mockFormatSummaryIndexForPlot,
+  formatSummaryRowsForPlotByColumns_ACU: vi.fn(() => ({ success: false, content: '', rowCount: 0 })),
   getSummaryIndexContentForPlot_ACU: vi.fn(),
   extractAllAmCodesFromSummaryTable_ACU: mockExtractAllAmCodesFromSummaryTable,
   buildDirectRecallTaskResponse_ACU: mockBuildDirectRecallTaskResponse,
+}));
+
+vi.mock('../../../../src/service/vector/vector-memory-config', () => ({
+  getCurrentVectorMemoryConfig_ACU: vi.fn(() => ({ summaryIndexPlotInjectColumns: [] })),
+}));
+
+vi.mock('../../../../src/service/vector/summary-vector-recall-cache', () => ({
+  getLatestSummaryVectorRecallSnapshot_ACU: vi.fn(() => null),
 }));
 
 vi.mock('../../../../src/service/runtime/plot-runtime/plot-tag-utils', () => ({

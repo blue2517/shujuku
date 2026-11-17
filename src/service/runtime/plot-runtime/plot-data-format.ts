@@ -194,6 +194,87 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine';
     }
   }
 
+  function resolvePlotSummaryColumnIndex_ACU(headerRow: any[], columnName: string): number {
+    const target = String(columnName ?? '').trim();
+    if (!target) return -1;
+    const exactIdx = headerRow.findIndex((h: any, index: number) => index > 0 && String(h ?? '').trim() === target);
+    if (exactIdx >= 0) return exactIdx;
+    const summaryAliases = ['概览', '概要', '概述', '摘要'];
+    if (summaryAliases.includes(target)) {
+      return headerRow.findIndex((h: any, index: number) => index > 0 && summaryAliases.includes(String(h ?? '').trim()));
+    }
+    return -1;
+  }
+
+  /**
+   * [剧情推进专用] 按指定编码列表与指定列从纪要表投影内容给推进 AI（不写回世界书常驻条目）。
+   */
+  export function formatSummaryRowsForPlotByColumns_ACU(
+    allTablesJson: any,
+    options: { columns?: string[]; filterIndexCodes?: string[] | null } = {},
+  ): { success: boolean; content: string; rowCount: number } {
+    try {
+      if (!allTablesJson || typeof allTablesJson !== 'object') {
+        return { success: false, content: '纪要索引：未获取到表格数据。', rowCount: 0 };
+      }
+      const sheets: any[] = Object.values(allTablesJson).filter((x: any) => x && typeof x === 'object' && x.name && x.content);
+      const summaryTable = sheets.find(s => {
+        const name = String(s.name || '').trim();
+        return name === '纪要表' || name === '总结表';
+      });
+      if (!summaryTable || !Array.isArray(summaryTable.content) || summaryTable.content.length <= 1) {
+        return { success: false, content: '纪要索引：未找到纪要表或纪要表为空。', rowCount: 0 };
+      }
+
+      const headerRow = Array.isArray(summaryTable.content[0]) ? summaryTable.content[0] : [];
+      const indexColIdx = headerRow.findIndex((h: any) => String(h ?? '').trim() === '编码索引');
+      if (indexColIdx === -1) {
+        return { success: false, content: '纪要索引：未找到编码索引列。', rowCount: 0 };
+      }
+
+      const requestedCols = Array.isArray(options.columns)
+        ? Array.from(new Set(options.columns.map(c => String(c ?? '').trim()).filter(Boolean)))
+        : [];
+      const resolvedCols = requestedCols
+        .map(colName => ({ colName, colIdx: resolvePlotSummaryColumnIndex_ACU(headerRow, colName) }))
+        .filter(item => item.colIdx >= 0)
+        .sort((a, b) => a.colIdx - b.colIdx);
+      if (resolvedCols.length === 0) {
+        return { success: false, content: '纪要索引：未匹配到所选注入列。', rowCount: 0 };
+      }
+
+      const filterSet = Array.isArray(options.filterIndexCodes)
+        ? new Set(options.filterIndexCodes.map(code => String(code ?? '').trim()).filter(Boolean))
+        : null;
+
+      const dataRows = summaryTable.content.slice(1).filter((r: any) => Array.isArray(r));
+      const blocks: string[] = [];
+      for (const row of dataRows) {
+        const indexCode = String(row[indexColIdx] ?? '').trim();
+        if (!indexCode) continue;
+        if (filterSet && !filterSet.has(indexCode)) continue;
+
+        const fieldLines: string[] = [];
+        for (const { colName, colIdx } of resolvedCols) {
+          if (colIdx === indexColIdx) continue;
+          const val = String(row[colIdx] ?? '').trim();
+          if (val) {
+            fieldLines.push(`- ${colName}: ${val}`);
+          }
+        }
+        if (fieldLines.length === 0 && !resolvedCols.some(item => item.colIdx === indexColIdx)) continue;
+        blocks.push(fieldLines.length > 0 ? `### [${indexCode}]\n${fieldLines.join('\n')}` : `### [${indexCode}]`);
+      }
+
+      const header = `## 表格: 纪要索引（共 ${blocks.length} 条）`;
+      const content = blocks.length > 0 ? `${header}\n\n${blocks.join('\n\n')}` : `${header}\n(无匹配数据行)`;
+      return { success: true, content, rowCount: blocks.length };
+    } catch (e) {
+      logError_ACU('[剧情推进] 按列格式化纪要内容时出错:', e);
+      return { success: false, content: '纪要索引：格式化时发生错误。', rowCount: 0 };
+    }
+  }
+
   /** [剧情推进专用] 从本地表格数据中提取全部有效的 AM 编码列表及记录总数 */
   export function extractAllAmCodesFromSummaryTable_ACU(allTablesJson: any): { totalCount: number; codes: string[]; foundTable: boolean } {
     if (!allTablesJson || typeof allTablesJson !== 'object') {

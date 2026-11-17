@@ -122,6 +122,8 @@ interface SummaryVectorIndexPendingArchive_ACU {
     chat: any[];
     aggregatedSnapshot: ReturnType<typeof getAggregatedSummaryVectorIndexSnapshot_ACU>;
     embeddingModel: string;
+    vectorColumns?: string[];
+    chunkSentenceCount?: number;
     preparedRows: SummaryVectorArchivePreparedRow_ACU[];
     finalRows: ChatSummaryVectorIndexRow_ACU[];
     finalChunks: ChatSummaryVectorIndexChunk_ACU[];
@@ -167,6 +169,8 @@ async function persistPendingVectorIndexArchive_ACU(scopeKey: string): Promise<v
             chat: pending.chat,
             aggregatedSnapshot: latestAggregatedSnapshot || pending.aggregatedSnapshot,
             embeddingModel: pending.embeddingModel,
+            vectorColumns: pending.vectorColumns,
+            chunkSentenceCount: pending.chunkSentenceCount,
             preparedRows: pending.preparedRows,
             finalRows: pending.finalRows,
             finalChunks: pending.finalChunks,
@@ -379,7 +383,33 @@ function chunkTextBySentenceCount_ACU(text: string, sentenceCount: number): stri
     return chunks;
 }
 
-export function buildPreparedRows_ACU(table: any, summaryKey: string): {
+export function getSummaryTableColumnNames_ACU(sourceTableKey?: string): string[] {
+    const selected = findSummaryTable_ACU(sourceTableKey);
+    const headerRow = Array.isArray(selected?.table?.content?.[0]) ? selected!.table.content[0] : [];
+    const cols = headerRow.slice(1).map((h: any) => normalizeText_ACU(h)).filter(Boolean);
+    return Array.from(new Set(cols));
+}
+
+function resolveSummaryTableColumnIndex_ACU(headerRow: any[], columnName: string): number {
+    const target = normalizeText_ACU(columnName);
+    if (!target) return -1;
+    const exactIdx = headerRow.findIndex((cell: any, index: number) => index > 0 && normalizeText_ACU(cell) === target);
+    if (exactIdx >= 0) return exactIdx;
+    const summaryAliases = ['概览', '概要', '概述', '摘要'];
+    if (summaryAliases.includes(target)) {
+        return resolveColumnIndexByAliases_ACU(headerRow, summaryAliases);
+    }
+    return -1;
+}
+
+function areVectorColumnListsEqual_ACU(a?: string[], b?: string[]): boolean {
+    const normA = Array.isArray(a) ? a.map((item) => normalizeText_ACU(item)).filter(Boolean) : [];
+    const normB = Array.isArray(b) ? b.map((item) => normalizeText_ACU(item)).filter(Boolean) : [];
+    if (normA.length !== normB.length) return false;
+    return normA.every((item, idx) => item === normB[idx]);
+}
+
+export function buildPreparedRows_ACU(table: any, summaryKey: string, vectorColumns?: string[]): {
     rows: SummaryVectorArchivePreparedRow_ACU[];
     skippedRowCount: number;
     error: string;
@@ -390,12 +420,20 @@ export function buildPreparedRows_ACU(table: any, summaryKey: string): {
     const locationColIdx = resolveColumnIndexByAliases_ACU(headerRow, ['地点', '位置', '场景', '场所'], 1);
     const summaryColIdx = resolveColumnIndexByAliases_ACU(headerRow, ['概要', '概览', '概述', '摘要']);
     const indexColIdx = resolveColumnIndexByAliases_ACU(headerRow, ['编码索引']);
-    if (summaryColIdx < 0) {
+    const selectedVectorColumns = Array.isArray(vectorColumns)
+        ? Array.from(new Set(vectorColumns.map((col) => normalizeText_ACU(col)).filter(Boolean)))
+        : [];
+    if (summaryColIdx < 0 && selectedVectorColumns.length === 0) {
         return { rows: [], skippedRowCount: 0, error: '纪要表缺少概要列，无法构建纪要向量索引。' };
     }
     if (indexColIdx < 0) {
         return { rows: [], skippedRowCount: 0, error: '纪要表缺少编码索引列，无法构建纪要向量索引。' };
     }
+
+    const resolvedVectorCols = selectedVectorColumns
+        .map((colName) => ({ colName, colIdx: resolveSummaryTableColumnIndex_ACU(headerRow, colName) }))
+        .filter((item) => item.colIdx >= 0)
+        .sort((a, b) => a.colIdx - b.colIdx);
 
     const dataRows = content.slice(1).filter((row: any) => Array.isArray(row));
     const preparedRows: SummaryVectorArchivePreparedRow_ACU[] = [];
@@ -404,10 +442,21 @@ export function buildPreparedRows_ACU(table: any, summaryKey: string): {
         const rowId = normalizeText_ACU(row?.[0]) || String(rowIndex + 1);
         const timeSpan = timeSpanColIdx >= 0 ? normalizeText_ACU(row?.[timeSpanColIdx]) : '';
         const location = locationColIdx >= 0 ? normalizeText_ACU(row?.[locationColIdx]) : '';
-        const summary = normalizeText_ACU(row?.[summaryColIdx]);
+        const summary = summaryColIdx >= 0 ? normalizeText_ACU(row?.[summaryColIdx]) : '';
         const indexCode = normalizeText_ACU(row?.[indexColIdx]);
-        const vectorSourceText = summary;
-        if (!summary || !indexCode || !vectorSourceText) {
+        let vectorSourceText = summary;
+        if (selectedVectorColumns.length > 0) {
+            const parts: string[] = [];
+            resolvedVectorCols.forEach(({ colName, colIdx }) => {
+                const value = normalizeText_ACU(row?.[colIdx]);
+                if (value) {
+                    parts.push(`[${colName}] ${value}`);
+                }
+            });
+            vectorSourceText = parts.join('\n');
+        }
+        const hasRequiredSummary = selectedVectorColumns.length === 0 ? !!summary : true;
+        if (!hasRequiredSummary || !indexCode || !vectorSourceText) {
             skippedRowCount += 1;
             return;
         }
@@ -484,7 +533,7 @@ function buildLayerStateWithRows_ACU(
             ...row,
             chunkIds: Array.isArray(row.chunkIds) ? row.chunkIds.filter(Boolean) : [],
         }))
-        .filter((row) => row.rowKey && row.rowId && row.summary && row.indexCode && row.chunkIds.length > 0)
+        .filter((row) => row.rowKey && row.rowId && (row.summary || row.vectorSourceText) && row.indexCode && row.chunkIds.length > 0)
         .sort((left, right) => left.rowOrder - right.rowOrder || left.rowKey.localeCompare(right.rowKey));
     const validRowKeys = new Set(normalizedRows.map((row) => row.rowKey));
     const validChunkIds = new Set(normalizedRows.flatMap((row) => row.chunkIds));
@@ -740,6 +789,8 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
     chat: any[];
     aggregatedSnapshot: ReturnType<typeof getAggregatedSummaryVectorIndexSnapshot_ACU>;
     embeddingModel: string;
+    vectorColumns?: string[];
+    chunkSentenceCount?: number;
     preparedRows: SummaryVectorArchivePreparedRow_ACU[];
     finalRows: ChatSummaryVectorIndexRow_ACU[];
     finalChunks: ChatSummaryVectorIndexChunk_ACU[];
@@ -812,7 +863,7 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
         .map((row) => row.rowKey);
 
     const nextRows = Array.from(nextRowsByKey.values())
-        .filter((row) => row.rowKey && row.rowId && row.summary && row.indexCode && Array.isArray(row.chunkIds) && row.chunkIds.length > 0)
+        .filter((row) => row.rowKey && row.rowId && (row.summary || row.vectorSourceText) && row.indexCode && Array.isArray(row.chunkIds) && row.chunkIds.length > 0)
         .sort((left, right) => left.rowOrder - right.rowOrder || left.rowKey.localeCompare(right.rowKey));
     const validRowKeys = new Set(nextRows.map((row) => row.rowKey));
     const validChunkIds = new Set(nextRows.flatMap((row) => row.chunkIds));
@@ -833,10 +884,11 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
         updateGroupKeys: [],
     };
     let uploadedFiles: SummaryVectorIndexExternalFileRef_ACU[] = [];
+    let previousManifest: any = null;
     let publishedManifest: any = null;
     let patchState: { summaryVectorIndexState: ChatSummaryVectorIndexState_ACU | null; summaryVectorIndexManifest: any } | null = null;
     if (nextState) {
-        const previousManifest = existingTagData.summaryVectorIndexManifest || previousState?.manifest || null;
+        previousManifest = existingTagData.summaryVectorIndexManifest || previousState?.manifest || null;
         const persisted = await persistSummaryVectorIndexSnapshot_ACU({
             chatKey: currentChatFileIdentifier_ACU,
             isolationKey: options.isolationKey,
@@ -849,6 +901,8 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
             indexedAt: options.indexedAt,
             skippedRowCount: nextState.skippedRowCount,
             embeddingModel: options.embeddingModel,
+            vectorColumns: options.vectorColumns,
+            chunkSentenceCount: options.chunkSentenceCount,
             activeRowKeys: nextState.rows.map((row) => row.rowKey),
             activeChunkIds: nextChunks.map((chunk) => chunk.chunkId),
             removedRowKeys,
@@ -872,7 +926,7 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
                 options.expectedFlushGeneration,
             );
         }
-        await commitVectorMetadataPatch_ACU(message, tagIsolationKey, {
+        const committed = await commitVectorMetadataPatch_ACU(message, tagIsolationKey, {
             summaryVectorIndexState: patchState.summaryVectorIndexState,
             summaryVectorIndexManifest: patchState.summaryVectorIndexManifest,
         }, {
@@ -887,6 +941,9 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
                 });
             },
         });
+        if (nextState && publishedManifest && !committed && previousManifest?.indexId !== publishedManifest.indexId) {
+            throw new Error(`交火向量索引聊天指针写入未生效：isolationKey=${String(tagIsolationKey)}`);
+        }
         await finalizeSummaryVectorIndexSnapshotPublication_ACU(uploadedFiles);
     } catch (error) {
         abortSummaryVectorIndexSnapshotPublication_ACU(uploadedFiles);
@@ -1002,7 +1059,7 @@ export async function migrateLegacySummaryVectorIndexToContentAddressed_ACU(opti
                 .filter((chunkId) => activeChunkIds.size === 0 || activeChunkIds.has(chunkId));
             return { ...row, chunkIds };
         })
-        .filter((row) => row.rowKey && row.rowId && row.summary && row.indexCode && row.chunkIds.length > 0);
+        .filter((row) => row.rowKey && row.rowId && (row.summary || row.vectorSourceText) && row.indexCode && row.chunkIds.length > 0);
     const validChunkIds = new Set(rows.flatMap((row) => row.chunkIds));
     const finalChunks = chunks
         .filter((chunk) => validChunkIds.has(chunk.chunkId))
@@ -1223,7 +1280,7 @@ async function archiveSummaryVectorIndexNowUnlocked_ACU(options: SummaryVectorIn
     }
     const snapshotMessageId = snapshotAnchor.anchor;
 
-    const prepared = buildPreparedRows_ACU(selectedSummary.table, selectedSummary.summaryKey);
+    const prepared = buildPreparedRows_ACU(selectedSummary.table, selectedSummary.summaryKey, config.summaryIndexVectorColumns);
     if (prepared.error) {
         return buildResult_ACU({
             success: false,
@@ -1288,6 +1345,10 @@ async function archiveSummaryVectorIndexNowUnlocked_ACU(options: SummaryVectorIn
         const existingManifestModel = existingState?.manifest?.embeddingModel;
         const embeddingIdentityChanged = existingManifestModel != null
             && String(existingManifestModel).trim() !== String(config.embeddingModel).trim();
+        const vectorColumnsChanged = !!existingState?.manifest
+            && !areVectorColumnListsEqual_ACU(existingState.manifest.vectorColumns, config.summaryIndexVectorColumns);
+        const chunkSentenceCountChanged = existingState?.manifest?.chunkSentenceCount != null
+            && Number(existingState.manifest.chunkSentenceCount) !== Number(config.summaryIndexChunkSentenceCount);
         if (embeddingIdentityChanged) {
             logSummaryVectorIndexIdentityEvent_ACU('warn', 'archive', 'embedding_identity_changed_full_rebuild', {
                 scopeFingerprint: buildSummaryVectorIndexArchiveScopeKey_ACU({
@@ -1298,14 +1359,14 @@ async function archiveSummaryVectorIndexNowUnlocked_ACU(options: SummaryVectorIn
                 error: `model=${String(existingManifestModel).trim()} → ${String(config.embeddingModel).trim()}`,
             });
         }
-        const reusable = embeddingIdentityChanged
+        const reusable = (embeddingIdentityChanged || vectorColumnsChanged || chunkSentenceCountChanged)
             ? { reusableRows: [] as ChatSummaryVectorIndexRow_ACU[], reusableChunks: [] as ChatSummaryVectorIndexChunk_ACU[], rowsNeedingEmbedding: prepared.rows }
             : buildExistingReusableRows_ACU(prepared.rows, existingState);
         const rowsNeedingEmbedding = reusable.rowsNeedingEmbedding;
         const activeRowKeysUnchanged = areSummaryVectorActiveRowKeysSame_ACU(prepared.rows, existingState);
         const existingActiveRowCount = existingState?.manifest?.snapshot?.activeRowKeys?.length || existingState?.rows?.length || 0;
-        logDebug_ACU(`[纪要向量索引] 增量归档判定：operation=incremental_archive_eval, scope=${selectedSummary.summaryKey}, indexId=${existingState?.manifest?.indexId || ''}, changed=${!activeRowKeysUnchanged || rowsNeedingEmbedding.length > 0 || prepared.skippedRowCount > 0}`);
-        if (!options.force && rowsNeedingEmbedding.length === 0 && existingState?.manifest && activeRowKeysUnchanged) {
+        logDebug_ACU(`[纪要向量索引] 增量归档判定：operation=incremental_archive_eval, scope=${selectedSummary.summaryKey}, indexId=${existingState?.manifest?.indexId || ''}, changed=${!activeRowKeysUnchanged || rowsNeedingEmbedding.length > 0 || prepared.skippedRowCount > 0 || vectorColumnsChanged || chunkSentenceCountChanged}`);
+        if (!options.force && !vectorColumnsChanged && !chunkSentenceCountChanged && rowsNeedingEmbedding.length === 0 && existingState?.manifest && activeRowKeysUnchanged) {
             logDebug_ACU('[纪要向量索引] 当前纪要表未发现新增、变更或删除条目，跳过重复覆盖上传。');
             return buildResult_ACU({
                 success: true,
@@ -1420,6 +1481,8 @@ async function archiveSummaryVectorIndexNowUnlocked_ACU(options: SummaryVectorIn
                 chat,
                 aggregatedSnapshot,
                 embeddingModel: config.embeddingModel,
+                vectorColumns: config.summaryIndexVectorColumns,
+                chunkSentenceCount: config.summaryIndexChunkSentenceCount,
                 preparedRows: prepared.rows,
                 finalRows: finalResult.rows,
                 finalChunks: finalResult.chunks,
@@ -1454,6 +1517,8 @@ async function archiveSummaryVectorIndexNowUnlocked_ACU(options: SummaryVectorIn
             chat,
             aggregatedSnapshot,
             embeddingModel: config.embeddingModel,
+            vectorColumns: config.summaryIndexVectorColumns,
+            chunkSentenceCount: config.summaryIndexChunkSentenceCount,
             preparedRows: prepared.rows,
             finalRows: finalResult.rows,
             finalChunks: finalResult.chunks,

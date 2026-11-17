@@ -1,4 +1,5 @@
 import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import { normalizeSummaryVectorIndexScope_ACU } from '../../shared/summary-vector-index-scope';
 import { commitVectorMetadataPatch_ACU, commitVectorMetadataPatchesBatch_ACU } from './summary-vector-index-chat-commit';
 import type { ChatSummaryVectorIndexState_ACU } from './summary-vector-index-types';
 import {
@@ -57,9 +58,10 @@ function getUniqueSummaryVectorIndexSourceTableKeyForRecovery_ACU(): string {
 
 export async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU(): Promise<boolean> {
     const chatKey = String(currentChatFileIdentifier_ACU || '').trim();
-    const isolationKey = String(getCurrentIsolationKey_ACU() || '').trim();
+    const tagIsolationKey = String(getCurrentIsolationKey_ACU() || '').trim();
+    const isolationKey = normalizeSummaryVectorIndexScope_ACU({ isolationKey: tagIsolationKey }).isolationKey;
     const sourceTableKey = getUniqueSummaryVectorIndexSourceTableKeyForRecovery_ACU();
-    if (!chatKey || !isolationKey || !sourceTableKey) return false;
+    if (!chatKey || !sourceTableKey) return false;
 
     const chatName = getCurrentCharacterCardName_ACU();
     const registeredFiles = await loadVectorIndexRegistry_ACU()
@@ -81,7 +83,7 @@ export async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU(): Pr
         if (targetIndex < 0) return false;
 
         const message = chat[targetIndex];
-        if (readIsolatedTagData_ACU(message, isolationKey)?.summaryVectorIndexState?.manifest?.indexId) return false;
+        if (readIsolatedTagData_ACU(message, tagIsolationKey)?.summaryVectorIndexState?.manifest?.indexId) return false;
         const rows = Array.isArray(blob.rows) ? blob.rows : [];
         const chunks = Array.isArray(blob.chunks) ? blob.chunks : [];
         const nextState: ChatSummaryVectorIndexState_ACU = {
@@ -105,7 +107,7 @@ export async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU(): Pr
         };
         try {
             // CAS：目标槽当前必须不存在有效 indexId，防止外部读取期间已有新 pointer。
-            return await commitVectorMetadataPatch_ACU(message, isolationKey, {
+            return await commitVectorMetadataPatch_ACU(message, tagIsolationKey, {
                 summaryVectorIndexState: nextState,
                 summaryVectorIndexManifest: JSON.parse(JSON.stringify(manifest)),
             }, {

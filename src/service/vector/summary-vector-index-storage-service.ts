@@ -124,6 +124,8 @@ export interface PersistSummaryVectorIndexExternalOptions_ACU {
     indexedAt: string;
     skippedRowCount: number;
     embeddingModel: string;
+    vectorColumns?: string[];
+    chunkSentenceCount?: number;
     shardChunkLimit?: number;
 }
 
@@ -1737,6 +1739,12 @@ export async function persistSummaryVectorIndexSnapshot_ACU(
         skippedRowCount: Math.max(0, Math.floor(Number(options.skippedRowCount) || 0)),
         embeddingModel: options.embeddingModel,
         dimension,
+        ...(Array.isArray(options.vectorColumns) && options.vectorColumns.length > 0
+            ? { vectorColumns: [...options.vectorColumns] }
+            : {}),
+        ...(Number.isFinite(Number(options.chunkSentenceCount)) && Number(options.chunkSentenceCount) > 0
+            ? { chunkSentenceCount: Math.floor(Number(options.chunkSentenceCount)) }
+            : {}),
         rowsFile: snapshotPath,
         tombstoneFile: snapshotPath,
         manifestFile: snapshotPath,

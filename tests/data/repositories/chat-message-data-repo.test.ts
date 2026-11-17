@@ -1876,9 +1876,19 @@ describe('patchIsolatedTagMetadata_ACU', () => {
     _acu_storage_mode: 'checkpoint',
   });
 
-  it('null msg / 空 isolationKey 返回 no-op', () => {
+  it('null msg / 非字符串 isolationKey / 空槽位空 patch 返回 no-op，关闭隔离时的默认空串槽可正常写入 metadata', () => {
     expect(patchIsolatedTagMetadata_ACU(null, 'k', {})).toEqual({ changed: false, tagData: null });
+    expect(patchIsolatedTagMetadata_ACU({}, null as any, { summaryVectorIndexState: validState('idx-x') })).toEqual({ changed: false, tagData: null });
     expect(patchIsolatedTagMetadata_ACU({}, '', {})).toEqual({ changed: false, tagData: null });
+
+    const defaultMsg: any = {};
+    const defaultResult = patchIsolatedTagMetadata_ACU(defaultMsg, '', {
+      summaryVectorIndexState: validState('idx-default'),
+      summaryVectorIndexManifest: { indexId: 'idx-default' },
+    });
+    expect(defaultResult.changed).toBe(true);
+    expect(defaultMsg.TavernDB_ACU_IsolatedData[''].summaryVectorIndexState.indexId).toBe('idx-default');
+    expect(defaultMsg.TavernDB_ACU_IsolatedData[''].summaryVectorIndexManifest.indexId).toBe('idx-default');
   });
 
   it('无槽新消息：纯 metadata 写入成功，tracking 字段不存在且绝不为 {}', () => {

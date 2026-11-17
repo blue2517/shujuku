@@ -14,6 +14,7 @@ import { globalMeta_ACU, loadGlobalMeta_ACU, readProfileSettingsFromStorage_ACU,
 import { getCurrentTemplatePresetName_ACU, normalizeTemplatePresetSelectionValue_ACU } from '../../shared/template-preset-utils';
 import { persistSettingsToStorage_ACU } from '../../data/storage/config-storage';
 import { getCurrentVectorMemoryConfig_ACU } from '../vector/vector-memory-config';
+import { clearLatestSummaryVectorRecallSnapshot_ACU } from '../vector/summary-vector-recall-cache';
 import { isIndexedDbAvailable_ACU } from '../../shared/idb-import-temp';
 import { configIdbCacheLoaded_ACU, ensureConfigIdbCacheLoaded_ACU, getConfigStorage_ACU, initTavernSettingsBridge_ACU, migrateKeyToTavernStorageIfNeeded_ACU, pendingSettingsReloadFromIdb_ACU, _set_pendingSettingsReloadFromIdb_ACU} from '../../data/storage/tavern-storage';
 import { ensureTagRulesCompat_ACU } from '../plot/plot-logic';
@@ -1046,6 +1047,9 @@ export function setSummaryVectorIndexMode_ACU(modeEnabled: boolean) {
     // 这里只改 enabled，不覆盖模型、API、rerank、namespace 等用户配置。
     const vectorMemoryConfig = getCurrentVectorMemoryConfig_ACU();
     vectorMemoryConfig.enabled = enabled;
+    if (!enabled) {
+        clearLatestSummaryVectorRecallSnapshot_ACU();
+    }
 
     // 交火模式只控制纪要索引条目本身，不再强制关闭 0TK。
     const cfg = getCurrentWorldbookConfig_ACU();

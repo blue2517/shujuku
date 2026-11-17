@@ -6,6 +6,7 @@ export const vectorIndexCopy = {
     prompt: "提示词",
     recall: "召回参数",
     archive: "归档分块",
+    diagnostics: "效果诊断",
   },
   panels: {
     status: {
@@ -14,7 +15,7 @@ export const vectorIndexCopy = {
     },
     keyword: {
       title: "关键词生成",
-      description: "发送前用轻量AI生成关键词辅助召回。失败时回退，不影响发送。",
+      description: "控制检索文本（Query）如何构造：可做 AI 回复标签清洗、末尾完整句字数截取，或开关小模型提词。",
     },
     api: {
       title: "Embedding / Rerank",
@@ -34,6 +35,11 @@ export const vectorIndexCopy = {
       title: "归档与分块",
       description:
         "纪要保存后自动切句并分批上传。值越小召回越精细，分片越多。并发上限低会让归档变慢。",
+    },
+    diagnostics: {
+      title: "召回效果诊断",
+      description:
+        "查看实际送入匹配的检索文本，以及最近一次（或试跑）的命中编码、相似度/重排分数和匹配分片原文；试跑测试不发消息也不改动世界书。",
     },
   },
 };

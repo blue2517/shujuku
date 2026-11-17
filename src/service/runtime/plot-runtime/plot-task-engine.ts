@@ -19,7 +19,9 @@ import { ensurePlotTasksCompat_ACU, getPlotPromptContentByIdFromSettings_ACU, no
 import { parseRandomTags_ACU, replaceRandomVariables_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from '../template-vars';
 import { applyContextTagFilters_ACU, applyExcludeRulesToText_ACU } from '../helpers-context-tags';
 import { mergeAllIndependentTables_ACU } from '../helpers-data-merge';
-import { formatTableDataForLLM_ACU, formatOutlineTableForPlot_ACU, formatSummaryIndexForPlot_ACU, getSummaryIndexContentForPlot_ACU, extractAllAmCodesFromSummaryTable_ACU, buildDirectRecallTaskResponse_ACU } from './plot-data-format';
+import { formatTableDataForLLM_ACU, formatOutlineTableForPlot_ACU, formatSummaryIndexForPlot_ACU, formatSummaryRowsForPlotByColumns_ACU, getSummaryIndexContentForPlot_ACU, extractAllAmCodesFromSummaryTable_ACU, buildDirectRecallTaskResponse_ACU } from './plot-data-format';
+import { getCurrentVectorMemoryConfig_ACU } from '../../vector/vector-memory-config';
+import { getLatestSummaryVectorRecallSnapshot_ACU } from '../../vector/summary-vector-recall-cache';
 import { getNormalizedPlotMessageRole_ACU, tryRenderPlotTemplateWithEjs_ACU, renderPlotTaskContentWithIsolatedVariables_ACU, extractPlotTagsFromResponse_ACU, getPlotPlaceholderTagNames_ACU, buildPlotTagMapFromText_ACU, replacePlotTagPlaceholders_ACU, buildTaskWorldbookTriggerText_ACU, sortPlotTaskResults_ACU, aggregatePlotTaskTags_ACU, buildPlotSaveContentFromTaskResults_ACU, buildFinalPlotInjectionMessage_ACU } from './plot-tag-utils';
 import { flushPlotPendingSave_ACU, getPlotFromHistory_ACU, savePlotToLatestMessage_ACU } from './plot-history-preset';
 import { abortableDelay } from '../../../shared/abortable-delay';
@@ -214,22 +216,45 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
         } catch (e) { logWarn_ACU('[剧情任务] 合并表格数据失败, 剧情推进可能使用过时数据:', e); }
       }
 
-      const summaryIndexWorldbookContent = await getSummaryIndexContentForPlot_ACU(plotSettings);
-      if (typeof summaryIndexWorldbookContent === 'string' && summaryIndexWorldbookContent.trim()) {
-        outlineTableContent = summaryIndexWorldbookContent;
-        logDebug_ACU('[剧情推进] $5 使用世界书纪要索引条目内容');
-      } else if (currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object') {
-        const summaryIndexResult = formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU);
-        if (summaryIndexResult.success) {
-          outlineTableContent = summaryIndexResult.content;
-          logDebug_ACU('[剧情推进] $5 未找到世界书纪要索引条目，使用纪要表的概要和编码索引列');
-        } else {
-          logDebug_ACU('[剧情推进] $5 纪要表读取失败，回退使用总体大纲表。原因:', summaryIndexResult.content);
-          outlineTableContent = formatOutlineTableForPlot_ACU(currentJsonTableData_ACU);
-          logDebug_ACU('[剧情推进] $5 回退使用总体大纲表内容');
+      const vectorConfig = getCurrentVectorMemoryConfig_ACU();
+      const customPlotColumns = Array.isArray(vectorConfig?.summaryIndexPlotInjectColumns)
+        ? vectorConfig.summaryIndexPlotInjectColumns.filter(Boolean)
+        : [];
+      const isolationKey = settings_ACU?.dataIsolationEnabled ? String(settings_ACU?.dataIsolationCode || '') : '';
+      const recallSnapshot = getLatestSummaryVectorRecallSnapshot_ACU(currentChatFileIdentifier_ACU || undefined, isolationKey);
+
+      if (customPlotColumns.length > 0 && currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object') {
+        const projected = formatSummaryRowsForPlotByColumns_ACU(currentJsonTableData_ACU, {
+          columns: customPlotColumns,
+          filterIndexCodes: recallSnapshot ? recallSnapshot.indexCodes : null,
+        });
+        if (projected.success) {
+          outlineTableContent = projected.content;
+          logDebug_ACU(
+            `[剧情推进] $5 使用自定义投影列(${customPlotColumns.join('、')})，行数=${projected.rowCount}`
+            + (recallSnapshot ? `（经交火初筛 ${recallSnapshot.indexCodes.length} 个编码）` : ''),
+          );
         }
-      } else {
-        outlineTableContent = '纪要索引：当前未加载到数据库数据。';
+      }
+
+      if (!outlineTableContent) {
+        const summaryIndexWorldbookContent = await getSummaryIndexContentForPlot_ACU(plotSettings);
+        if (typeof summaryIndexWorldbookContent === 'string' && summaryIndexWorldbookContent.trim()) {
+          outlineTableContent = summaryIndexWorldbookContent;
+          logDebug_ACU('[剧情推进] $5 使用世界书纪要索引条目内容');
+        } else if (currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object') {
+          const summaryIndexResult = formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU);
+          if (summaryIndexResult.success) {
+            outlineTableContent = summaryIndexResult.content;
+            logDebug_ACU('[剧情推进] $5 未找到世界书纪要索引条目，使用纪要表的概要和编码索引列');
+          } else {
+            logDebug_ACU('[剧情推进] $5 纪要表读取失败，回退使用总体大纲表。原因:', summaryIndexResult.content);
+            outlineTableContent = formatOutlineTableForPlot_ACU(currentJsonTableData_ACU);
+            logDebug_ACU('[剧情推进] $5 回退使用总体大纲表内容');
+          }
+        } else {
+          outlineTableContent = '纪要索引：当前未加载到数据库数据。';
+        }
       }
     } catch (error) {
       logError_ACU('[剧情推进] 生成纪要索引($5)时出错:', error);

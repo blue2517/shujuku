@@ -27,7 +27,12 @@ vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: mockLogDebug,
 }));
 
-import { fetchAvailableModels_ACU, fetchModelsForProfile_ACU } from '../../../src/service/ai/ai-service';
+import {
+  deriveModelListBaseUrls_ACU,
+  fetchAvailableModels_ACU,
+  fetchModelsForProfile_ACU,
+  fetchModelsFromVectorEndpoint_ACU,
+} from '../../../src/service/ai/ai-service';
 
 // 模拟 fetch
 const mockFetch = vi.fn();
@@ -275,5 +280,47 @@ describe('fetchModelsForProfile_ACU', () => {
     expect(body.reverse_proxy).toBe('https://proxy.example.com');
     expect(body.proxy_password).toBe('pwd');
     expect(body.custom_url).toBe('https://api.openai.com/v1');
+  });
+});
+
+describe('fetchModelsFromVectorEndpoint_ACU', () => {
+  it('能从 /v1/embeddings 和 /v1/rerank 正确推导出 /v1 基础地址', () => {
+    expect(deriveModelListBaseUrls_ACU('https://api.siliconflow.cn/v1/embeddings')).toEqual([
+      'https://api.siliconflow.cn/v1',
+      'https://api.siliconflow.cn/v1/embeddings',
+    ]);
+    expect(deriveModelListBaseUrls_ACU('https://api.siliconflow.cn/v1/rerank/')).toEqual([
+      'https://api.siliconflow.cn/v1',
+      'https://api.siliconflow.cn/v1/rerank',
+    ]);
+    expect(deriveModelListBaseUrls_ACU('https://custom.example/embeddings')).toEqual([
+      'https://custom.example',
+      'https://custom.example/v1',
+      'https://custom.example/embeddings',
+    ]);
+  });
+
+  it('从 Embedding 端点拉取模型列表并返回排序结果', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [{ id: 'BAAI/bge-reranker-v2-m3' }, { id: 'BAAI/bge-m3' }],
+      }),
+    });
+
+    const result = await fetchModelsFromVectorEndpoint_ACU('https://api.siliconflow.cn/v1/embeddings', 'sk-vec');
+    expect(result.success).toBe(true);
+    expect(result.models).toEqual(['BAAI/bge-m3', 'BAAI/bge-reranker-v2-m3']);
+
+    const callArgs = mockFetch.mock.calls[0][1];
+    const body = JSON.parse(callArgs.body);
+    expect(body.custom_url).toBe('https://api.siliconflow.cn/v1');
+    expect(body.custom_include_headers).toContain('sk-vec');
+  });
+
+  it('端点为空时直接返回错误', async () => {
+    const result = await fetchModelsFromVectorEndpoint_ACU('', 'sk-vec');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('请先填写端点 URL');
   });
 });

@@ -18,9 +18,94 @@
           <AcuStatsList :items="vector.statusStatsItems.value" />
 
           <p class="acu-v2-vector-index-page__hint">
-            发送前流程：关键词生成 → 用户输入与关键词合并 embedding → 概要列
-            chunk 预筛 → 可选 Rerank → 按纪要表原顺序覆盖原概要索引条目。
+            流程：先按「被向量化的列」建库并初筛出编码 → 再按「推进 AI 注入列」只把命中编码的这些列喂给剧情推进 AI（主模型世界书不被长正文污染）。
           </p>
+
+          <div class="acu-v2-vector-index-page__subconfig">
+            <AcuFormRow
+              label="被向量化的列（按哪些列搜）"
+              hint="决定用纪要表哪几列来算向量和相似度。比如勾选「概览 + 纪要」可提高检索命中率；不选则只搜概览。改完请点下方重建索引。"
+            >
+              <div class="acu-v2-vector-index-page__checkbox-group">
+                <AcuCheckbox
+                  v-for="col in vector.availableSummaryColumns.value"
+                  :key="`vec-${col}`"
+                  :model-value="vector.form.summaryIndexVectorColumns.includes(col)"
+                  :label="col"
+                  @update:model-value="vector.toggleColumnSelection('summaryIndexVectorColumns', col, $event)"
+                />
+              </div>
+            </AcuFormRow>
+
+            <AcuFormRow
+              label="推进 AI 注入列（给推进 AI 看哪些列）"
+              hint="决定初筛选中编码后，把哪几列喂给剧情推进 AI（自动附带编码索引）。与上面向量化列完全独立；不选则只看旧版简表。"
+            >
+              <div class="acu-v2-vector-index-page__checkbox-group">
+                <AcuCheckbox
+                  v-for="col in vector.availableSummaryColumns.value"
+                  :key="`plot-${col}`"
+                  :model-value="vector.form.summaryIndexPlotInjectColumns.includes(col)"
+                  :label="col"
+                  @update:model-value="vector.toggleColumnSelection('summaryIndexPlotInjectColumns', col, $event)"
+                />
+              </div>
+            </AcuFormRow>
+
+            <div class="acu-v2-vector-index-page__number-grid">
+              <AcuFormRow
+                label="共享总上限（固定 + 召回合计）"
+                hint="例如填 40：表示「最近固定条数 + 向量召回条数」加起来最多 40 条（固定优先占位，剩余给向量）；填 0 表示不限制总和。"
+              >
+                <AcuInput
+                  :model-value="vector.form.summaryIndexSharedTotalLimit"
+                  type="number"
+                  :min="0"
+                  :step="1"
+                  @change="vector.setNonNegativeNumberField('summaryIndexSharedTotalLimit', $event)"
+                />
+              </AcuFormRow>
+              <template v-if="!devOptions.vectorIndexAdvanced.value">
+                <AcuFormRow
+                  label="启用向量最少纪要数"
+                  hint="纪要达到该行数才开启向量初筛（小聊天想立刻测试可设 1～20）。"
+                >
+                  <AcuInput
+                    :model-value="vector.form.summaryIndexKeywordMinRows"
+                    type="number"
+                    :min="1"
+                    :step="1"
+                    @change="vector.setNumberField('summaryIndexKeywordMinRows', $event)"
+                  />
+                </AcuFormRow>
+                <AcuFormRow
+                  label="固定保留最新条数"
+                  hint="最新 N 条纪要必带（如设 5）；若总上限为 40，固定占 5 个名额，剩下 35 个名额给向量召回。"
+                >
+                  <AcuInput
+                    :model-value="vector.form.recentFixedInjectCount"
+                    type="number"
+                    :min="1"
+                    :step="1"
+                    @update:model-value="vector.previewRecentFixedInjectCount($event)"
+                    @change="vector.setNumberField('recentFixedInjectCount', $event)"
+                  />
+                </AcuFormRow>
+                <AcuFormRow
+                  label="向量最多召回条数（TopK）"
+                  hint="从更早历史里最多捞几条（受共享总上限扣减约束）。"
+                >
+                  <AcuInput
+                    :model-value="vector.form.topK"
+                    type="number"
+                    :min="1"
+                    :step="1"
+                    @change="vector.setNumberField('topK', $event)"
+                  />
+                </AcuFormRow>
+              </template>
+            </div>
+          </div>
 
           <div
             class="acu-v2-vector-index-page__maintenance-spacer"
@@ -65,49 +150,90 @@
           :title="vectorIndexCopy.panels.keyword.title"
           :description="vectorIndexCopy.panels.keyword.description"
         >
-          <AcuFormRow
-            label="关键词 API 预设"
-            hint="默认使用当前的API，仅用于发送前关键词生成。"
-          >
-            <AcuSelect
-              :options="keywordApiOptions"
-              :model-value="vector.form.keywordApiPreset"
-              :placeholder="followActiveApiLabel"
-              @update:model-value="
-                vector.setApiField('keywordApiPreset', $event)
-              "
-            />
-          </AcuFormRow>
-          <div class="acu-v2-vector-index-page__number-grid">
+          <div class="acu-v2-vector-index-page__subconfig">
+            <div class="acu-v2-vector-index-page__section-title">标签清洗与字数截取（构造检索文本前生效）</div>
             <AcuFormRow
-              label="上下文读取层数"
-              hint="关键词生成时读取的最近对话层数；1 层 = 1 条 AI 回复 + 其上方 1 条用户输入。"
+              label="标签清洗（剥离指定标签及内部内容）"
+              hint="填写要剔除的标签名（多个用逗号或换行分隔，如：标签触发, summary, thinking, options）。会在检索前把 <标签触发>...</标签触发> 整段移除。"
             >
-              <AcuInput
-                :model-value="vector.form.keywordContextPairCount"
-                type="number"
-                :min="1"
-                :step="1"
-                @change="
-                  vector.setNumberField('keywordContextPairCount', $event)
-                "
-              />
+              <textarea
+                :value="vector.form.queryStripTags"
+                class="acu-v2-vector-api-form__instruction-textarea"
+                rows="2"
+                placeholder="例如：标签触发, summary, thinking, options"
+                @change="vector.setApiField('queryStripTags', ($event.target as HTMLTextAreaElement).value)"
+              ></textarea>
             </AcuFormRow>
             <AcuFormRow
-              label="最大尝试次数"
-              hint="关键词生成失败时会回退到用户输入本身参与召回，不阻断原始发送。"
+              label="最新 AI 回复末尾截取字数（完整句子）"
+              hint="关闭下方「关键词 AI 生成」时生效：先执行上方标签清洗，再从最新 AI 回复末尾往前截取完整句子（绝不截断半句），与用户本轮输入拼在一起做向量检索。"
             >
               <AcuInput
-                :model-value="vector.form.keywordGenerationMaxAttempts"
+                :model-value="vector.form.queryTailCharLimit"
                 type="number"
                 :min="1"
-                :step="1"
-                @change="
-                  vector.setNumberField('keywordGenerationMaxAttempts', $event)
-                "
+                :step="50"
+                @change="vector.setNumberField('queryTailCharLimit', $event)"
               />
             </AcuFormRow>
           </div>
+
+          <AcuFormRow
+            label="启用关键词 AI 生成"
+            hint="打开：先让小模型结合上下文提取关键词（慢 1.5~4 秒，适合跳跃指代）；关闭：跳过小模型，直接用上方截取的 AI 回复末尾完整句 + 用户输入搜索（零等待）。"
+          >
+            <AcuToggle
+              :model-value="vector.form.keywordGenerationEnabled"
+              label="发送前调用 AI 生成检索关键词"
+              @update:model-value="vector.setBooleanField('keywordGenerationEnabled', $event)"
+            />
+          </AcuFormRow>
+
+          <template v-if="vector.form.keywordGenerationEnabled">
+            <AcuFormRow
+              label="关键词 API 预设"
+              hint="默认使用当前的API，仅用于发送前关键词生成。"
+            >
+              <AcuSelect
+                :options="keywordApiOptions"
+                :model-value="vector.form.keywordApiPreset"
+                :placeholder="followActiveApiLabel"
+                @update:model-value="
+                  vector.setApiField('keywordApiPreset', $event)
+                "
+              />
+            </AcuFormRow>
+            <div class="acu-v2-vector-index-page__number-grid">
+              <AcuFormRow
+                label="上下文读取层数"
+                hint="关键词生成时读取的最近对话层数；1 层 = 1 条 AI 回复 + 其上方 1 条用户输入。"
+              >
+                <AcuInput
+                  :model-value="vector.form.keywordContextPairCount"
+                  type="number"
+                  :min="1"
+                  :step="1"
+                  @change="
+                    vector.setNumberField('keywordContextPairCount', $event)
+                  "
+                />
+              </AcuFormRow>
+              <AcuFormRow
+                label="最大尝试次数"
+                hint="关键词生成失败时会回退到用户输入本身参与召回，不阻断原始发送。"
+              >
+                <AcuInput
+                  :model-value="vector.form.keywordGenerationMaxAttempts"
+                  type="number"
+                  :min="1"
+                  :step="1"
+                  @change="
+                    vector.setNumberField('keywordGenerationMaxAttempts', $event)
+                  "
+                />
+              </AcuFormRow>
+            </div>
+          </template>
         </AcuPanel>
       </div>
 
@@ -123,18 +249,21 @@
           >
             <fieldset class="acu-v2-vector-api-form__section">
               <legend>Embedding</legend>
-              <AcuFormRow label="URL">
+              <AcuFormRow
+                label="URL"
+                hint="填写完整 Embeddings 请求地址（通常以 /v1/embeddings 结尾）；点下方「加载模型」时会自动推导 /models 地址。"
+              >
                 <AcuInput
                   v-model="vectorApiConfig.form.embeddingEndpoint"
                   type="text"
-                  placeholder="https://example.com/embeddings"
+                  placeholder="https://example.com/v1/embeddings"
                 />
               </AcuFormRow>
               <AcuFormRow label="模型名">
                 <AcuInput
                   v-model="vectorApiConfig.form.embeddingModel"
                   type="text"
-                  placeholder="text-embedding-3-large"
+                  placeholder="BAAI/bge-m3"
                 />
               </AcuFormRow>
               <AcuFormRow label="API 密钥">
@@ -144,22 +273,53 @@
                   autocomplete="off"
                 />
               </AcuFormRow>
+              <div class="acu-v2-vector-api-form__inline-action">
+                <AcuButton
+                  type="button"
+                  :disabled="vectorApiConfig.embeddingModelLoadStatus.value === 'loading'"
+                  @click="vectorApiConfig.loadEmbeddingModels"
+                >
+                  加载模型
+                </AcuButton>
+                <span
+                  v-if="vectorApiConfig.embeddingModelLoadStatus.value === 'loading'"
+                  class="acu-v2-vector-api-form__muted"
+                >加载中...</span>
+                <span
+                  v-else-if="vectorApiConfig.embeddingModelLoadStatus.value === 'error'"
+                  class="acu-v2-vector-api-form__danger"
+                >{{ vectorApiConfig.embeddingModelLoadError.value }}</span>
+              </div>
+              <AcuFormRow
+                v-if="vectorApiConfig.embeddingModels.value.length"
+                label="Embedding 模型列表"
+              >
+                <AcuSelect
+                  :options="embeddingModelOptions"
+                  :model-value="vectorApiConfig.form.embeddingModel"
+                  placeholder="请选择模型"
+                  @update:model-value="vectorApiConfig.form.embeddingModel = $event"
+                />
+              </AcuFormRow>
             </fieldset>
 
             <fieldset class="acu-v2-vector-api-form__section">
               <legend>Rerank</legend>
-              <AcuFormRow label="URL">
+              <AcuFormRow
+                label="URL"
+                hint="填写完整 Rerank 请求地址（通常以 /v1/rerank 结尾，不要只填到 /v1）；点下方「加载模型」时会自动推导 /models 地址。"
+              >
                 <AcuInput
                   v-model="vectorApiConfig.form.rerankEndpoint"
                   type="text"
-                  placeholder="https://example.com/rerank"
+                  placeholder="https://example.com/v1/rerank"
                 />
               </AcuFormRow>
               <AcuFormRow label="模型名">
                 <AcuInput
                   v-model="vectorApiConfig.form.rerankModel"
                   type="text"
-                  placeholder="bge-reranker-v2-m3"
+                  placeholder="BAAI/bge-reranker-v2-m3"
                 />
               </AcuFormRow>
               <AcuFormRow label="API 密钥">
@@ -167,6 +327,34 @@
                   v-model="vectorApiConfig.form.rerankApiKey"
                   type="password"
                   autocomplete="off"
+                />
+              </AcuFormRow>
+              <div class="acu-v2-vector-api-form__inline-action">
+                <AcuButton
+                  type="button"
+                  :disabled="vectorApiConfig.rerankModelLoadStatus.value === 'loading'"
+                  @click="vectorApiConfig.loadRerankModels"
+                >
+                  加载模型
+                </AcuButton>
+                <span
+                  v-if="vectorApiConfig.rerankModelLoadStatus.value === 'loading'"
+                  class="acu-v2-vector-api-form__muted"
+                >加载中...</span>
+                <span
+                  v-else-if="vectorApiConfig.rerankModelLoadStatus.value === 'error'"
+                  class="acu-v2-vector-api-form__danger"
+                >{{ vectorApiConfig.rerankModelLoadError.value }}</span>
+              </div>
+              <AcuFormRow
+                v-if="vectorApiConfig.rerankModels.value.length"
+                label="Rerank 模型列表"
+              >
+                <AcuSelect
+                  :options="rerankModelOptions"
+                  :model-value="vectorApiConfig.form.rerankModel"
+                  placeholder="请选择模型"
+                  @update:model-value="vectorApiConfig.form.rerankModel = $event"
                 />
               </AcuFormRow>
               <AcuFormRow
@@ -228,8 +416,8 @@
       >
         <div class="acu-v2-vector-index-page__number-grid">
           <AcuFormRow
-            label="触发阈值"
-            hint="纪要有效行数达标后，发送前生成关键词并召回分块，未达标则保留原索引流程。"
+            label="触发阈值（启用向量最少纪要数）"
+            hint="纪要有效行数 ≥ 该值时才开启向量初筛（小聊天想马上测试可设 1～20）；未达标走普通流程。"
           >
             <AcuInput
               :model-value="vector.form.summaryIndexKeywordMinRows"
@@ -242,8 +430,8 @@
             />
           </AcuFormRow>
           <AcuFormRow
-            label="TopK"
-            hint="Rerank 后选中的纪要数量上限，写入时恢复原顺序。"
+            label="TopK（最多召回较早历史条数）"
+            hint="从更早历史里经向量与重排后最多捞回几条；若上方「共享总上限」大于 0（如 40），会自动减去固定条数。"
           >
             <AcuInput
               :model-value="vector.form.topK"
@@ -254,8 +442,8 @@
             />
           </AcuFormRow>
           <AcuFormRow
-            label="预筛最低分"
-            hint="Embedding 预筛分数门槛，低于此分不参与 Rerank。"
+            label="预筛最低分（向量相似度门槛）"
+            hint="0~1 之间，余弦相似度低于此分的片段直接丢弃不送去重排（常用 0.25~0.45，过高容易捞不到）。"
           >
             <AcuInput
               :model-value="vector.form.minScore"
@@ -267,8 +455,8 @@
             />
           </AcuFormRow>
           <AcuFormRow
-            label="候选上限"
-            hint="预筛保留的候选数，也是 Rerank 最大输入，不能小于 TopK。"
+            label="候选上限（送去重排片段数）"
+            hint="粗排最多送多少个片段给 Rerank 重排，必须 ≥ TopK；云端 Rerank 建议设 80~150，太大易变慢。"
           >
             <AcuInput
               :model-value="vector.form.recallCandidateLimit"
@@ -279,8 +467,8 @@
             />
           </AcuFormRow>
           <AcuFormRow
-            label="固定写入"
-            hint="最近 N 条纪要固定写入，不参与排序；计入触发阈值，不计入 TopK。"
+            label="固定写入（保留最新 N 条）"
+            hint="最新的 N 条纪要无论如何都会固定保留（比如 5）；若上方设了共享总上限 40，固定先占 N 个名额。"
           >
             <AcuInput
               :model-value="vector.form.recentFixedInjectCount"
@@ -293,7 +481,7 @@
           </AcuFormRow>
           <AcuFormRow
             label="命名空间"
-            hint="用于区分不同聊天的索引缓存，会拼接当前聊天标识。"
+            hint="用于区分不同聊天的索引缓存键前缀，一般保持默认 chat 即可。"
           >
             <AcuInput
               :model-value="vector.form.vectorNamespace"
@@ -390,6 +578,96 @@
       </AcuPanel>
     </AcuPanelGrid>
 
+    <AcuPanel
+      id="vector-index-diagnostics-panel"
+      :title="vectorIndexCopy.panels.diagnostics.title"
+      :description="vectorIndexCopy.panels.diagnostics.description"
+    >
+      <template #actions>
+        <AcuBadge v-if="diagData" :variant="diagBadgeVariant">{{ diagBadgeLabel }}</AcuBadge>
+      </template>
+
+      <div class="acu-v2-vector-diag__toolbar">
+        <AcuInput
+          v-model="vector.testUserInput.value"
+          type="text"
+          placeholder="输入测试台词（留空则自动读取最近一条用户发言，搭配当前 AI 末尾句试跑）"
+        />
+        <AcuButton
+          variant="primary"
+          :disabled="vector.testRecallBusy.value || vector.buildBusy.value"
+          @click="vector.runRecallDryTest"
+        >
+          {{ vector.testRecallBusy.value ? "正在试跑..." : "测试召回效果" }}
+        </AcuButton>
+        <AcuButton
+          :disabled="vector.testRecallBusy.value"
+          @click="vector.refreshRecallDiagnostics"
+        >
+          刷新记录
+        </AcuButton>
+      </div>
+
+      <p v-if="!diagData" class="acu-v2-vector-index-page__hint">
+        暂无召回记录。你可以直接点「测试召回效果」试跑一次，或在聊天中发送一条消息后再点「刷新记录」。
+      </p>
+
+      <div v-else class="acu-v2-vector-diag__body">
+        <div class="acu-v2-vector-diag__meta">
+          <span><strong>运行方式：</strong>{{ diagData.dryRun ? "UI 试跑（未写世界书）" : "真实发送前触发" }}</span>
+          <span><strong>构造模式：</strong>{{ diagData.queryMode === "direct" ? "直出截取拼接" : "关键词 AI 生成" }}</span>
+          <span><strong>耗时：</strong>{{ diagData.durationMs }} ms</span>
+          <span>
+            <strong>Rerank：</strong>
+            {{ diagData.rerankStatus === "applied" ? "已重排" : diagData.rerankStatus === "failed" ? `失败已回退（${diagData.rerankError || "未知错误"}）` : "未配置或已跳过" }}
+          </span>
+          <span>
+            <strong>候选漏斗：</strong>
+            向量 {{ diagData.denseCandidateCount }} / BM25 {{ diagData.sparseCandidateCount }} / 融合进重排 {{ diagData.fusionCandidateCount }} → 注入 {{ diagData.totalSelectedCount }}（固定 {{ diagData.recentFixedCount }} + 召回 {{ diagData.rankedCount }}）
+          </span>
+        </div>
+
+        <div v-if="diagData.skipped" class="acu-v2-vector-diag__warn">
+          本次未执行召回（reason: {{ diagData.reason || "skipped" }}）
+        </div>
+
+        <div v-if="diagData.keywords.length > 0" class="acu-v2-vector-diag__block">
+          <div class="acu-v2-vector-index-page__section-title">提取出的关键词（{{ diagData.keywords.length }}）</div>
+          <div class="acu-v2-vector-diag__query-box">{{ diagData.keywords.join("，") }}</div>
+        </div>
+
+        <div class="acu-v2-vector-diag__block">
+          <div class="acu-v2-vector-index-page__section-title">实际送入匹配的检索文本（Query Text）</div>
+          <pre class="acu-v2-vector-diag__query-box">{{ diagData.queryText || "（未生成检索文本）" }}</pre>
+        </div>
+
+        <div v-if="diagData.items.length > 0" class="acu-v2-vector-diag__block">
+          <div class="acu-v2-vector-index-page__section-title">命中编码与匹配分片明细（{{ diagData.items.length }} 条）</div>
+          <div class="acu-v2-vector-diag__items">
+            <div
+              v-for="item in diagData.items"
+              :key="`${item.rowKey}-${item.indexCode}`"
+              class="acu-v2-vector-diag__item"
+            >
+              <div class="acu-v2-vector-diag__item-head">
+                <AcuBadge :variant="item.kind === 'ranked' ? 'accent' : 'neutral'">{{ item.indexCode }}</AcuBadge>
+                <span class="acu-v2-vector-diag__kind">{{ item.kind === "ranked" ? "向量/重排命中" : "最近固定保留" }}</span>
+                <span v-if="item.kind === 'ranked'" class="acu-v2-vector-diag__scores">
+                  <template v-if="item.rerankScore !== undefined">Rerank {{ formatDiagScore(item.rerankScore) }} · </template>
+                  <template v-if="item.denseScore !== undefined">Embedding {{ formatDiagScore(item.denseScore) }} · </template>
+                  <template v-if="item.bm25Score !== undefined">BM25 {{ formatDiagScore(item.bm25Score) }}</template>
+                </span>
+              </div>
+              <div v-if="item.summaryPreview" class="acu-v2-vector-diag__summary">{{ item.summaryPreview }}</div>
+              <div v-if="item.matchedChunkText" class="acu-v2-vector-diag__chunk">
+                <strong>命中分片：</strong>{{ item.matchedChunkText }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </AcuPanel>
+
     <VectorIndexPromptDrawer
       :is-open="promptDrawerOpen"
       :segments="promptSegmentsForView"
@@ -412,6 +690,7 @@ import AcuBadge, {
   type AcuBadgeVariant,
 } from "../components/_lib/AcuBadge.vue";
 import AcuButton from "../components/_lib/AcuButton.vue";
+import AcuCheckbox from "../components/_lib/AcuCheckbox.vue";
 import AcuFormRow from "../components/_lib/AcuFormRow.vue";
 import AcuInput from "../components/_lib/AcuInput.vue";
 import AcuMessage from "../components/_lib/AcuMessage.vue";
@@ -470,13 +749,39 @@ const panelNavItems = computed(() => [
         },
       ]
     : []),
+  { id: "vector-index-diagnostics-panel", label: vectorIndexCopy.nav.diagnostics },
 ]);
+
+const diagData = computed(() => vector.recallDiagnostics.value);
+const diagBadgeVariant = computed<AcuBadgeVariant>(() => {
+  if (!diagData.value) return "neutral";
+  if (diagData.value.rerankStatus === "failed") return "warning";
+  if (diagData.value.skipped || !diagData.value.success) return "danger";
+  return "success";
+});
+const diagBadgeLabel = computed(() => {
+  if (!diagData.value) return "";
+  if (diagData.value.rerankStatus === "failed") return "已回退";
+  if (diagData.value.skipped) return "已跳过";
+  return diagData.value.dryRun ? "试跑完成" : "已记录";
+});
+
+function formatDiagScore(value: number | undefined): string {
+  return Number.isFinite(Number(value)) ? Number(value).toFixed(3) : "—";
+}
 
 const ROLE_OPTIONS: AcuSelectOption[] = [
   { value: "system", label: "SYSTEM" },
   { value: "user", label: "USER" },
   { value: "assistant", label: "ASSISTANT" },
 ];
+
+const embeddingModelOptions = computed<AcuSelectOption[]>(() =>
+  vectorApiConfig.embeddingModels.value.map((m) => ({ value: m, label: m })),
+);
+const rerankModelOptions = computed<AcuSelectOption[]>(() =>
+  vectorApiConfig.rerankModels.value.map((m) => ({ value: m, label: m })),
+);
 
 const promptSegmentsForView = computed<PromptSegment[]>(() =>
   vector.promptSegments.value.map((seg) => ({
@@ -624,6 +929,42 @@ useUiCloseGuard(confirmPromptClose);
   line-height: 1.55;
 }
 
+.acu-v2-vector-index-page__subconfig {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.acu-v2-vector-index-page__section-title {
+  font-size: var(--acu-font-size-body, 12px);
+  font-weight: 700;
+  color: var(--acu-text-1);
+}
+
+.acu-v2-vector-index-page__checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.acu-v2-vector-api-form__inline-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.acu-v2-vector-api-form__muted {
+  font-size: var(--acu-font-size-body, 12px);
+  color: var(--acu-text-3);
+}
+
+.acu-v2-vector-api-form__danger {
+  font-size: var(--acu-font-size-body, 12px);
+  color: var(--acu-danger, #ef4444);
+}
+
 .acu-v2-vector-index-page__maintenance-spacer {
   flex: 1 1 auto;
   min-height: 0;
@@ -677,5 +1018,107 @@ useUiCloseGuard(confirmPromptClose);
   font-size: var(--acu-font-size-small, 11px);
   line-height: 1.5;
   resize: vertical;
+}
+
+.acu-v2-vector-diag__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.acu-v2-vector-diag__toolbar > :first-child {
+  flex: 1 1 280px;
+}
+
+.acu-v2-vector-diag__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.acu-v2-vector-diag__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  font-size: var(--acu-font-size-body, 12px);
+  color: var(--acu-text-2, var(--acu-text-1));
+}
+
+.acu-v2-vector-diag__warn {
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--acu-warning, #f59e0b) 45%, transparent);
+  color: var(--acu-warning, #f59e0b);
+  font-size: var(--acu-font-size-body, 12px);
+}
+
+.acu-v2-vector-diag__block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.acu-v2-vector-diag__query-box {
+  margin: 0;
+  padding: 10px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent);
+  background: color-mix(in srgb, var(--acu-bg-2, #111) 60%, transparent);
+  color: var(--acu-text-1);
+  font-size: var(--acu-font-size-body, 12px);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.acu-v2-vector-diag__items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.acu-v2-vector-diag__item {
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.acu-v2-vector-diag__item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.acu-v2-vector-diag__kind {
+  font-size: var(--acu-font-size-small, 11px);
+  color: var(--acu-text-3);
+}
+
+.acu-v2-vector-diag__scores {
+  font-size: var(--acu-font-size-small, 11px);
+  color: var(--acu-accent, #6ee7b7);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.acu-v2-vector-diag__summary {
+  font-size: var(--acu-font-size-body, 12px);
+  color: var(--acu-text-1);
+  line-height: 1.45;
+}
+
+.acu-v2-vector-diag__chunk {
+  font-size: var(--acu-font-size-small, 11px);
+  color: var(--acu-text-3);
+  line-height: 1.45;
 }
 </style>

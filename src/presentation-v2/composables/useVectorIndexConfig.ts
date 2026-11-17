@@ -17,6 +17,7 @@ import {
 } from '../../service/vector/vector-memory-config';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
 import {
+  getSummaryTableColumnNames_ACU,
   migrateLegacySummaryVectorIndexToContentAddressed_ACU,
 } from '../../service/vector/summary-vector-index-archive-service';
 import { rebuildCurrentSummaryVectorIndexNow_ACU } from '../../service/vector/summary-vector-index-rebuild-service';
@@ -29,6 +30,12 @@ import {
 } from '../../service/vector/summary-vector-index-storage-service';
 import { clearAllSummaryVectorIndexCaches_ACU } from '../../service/vector/summary-vector-index-cache-service';
 import { deleteCurrentSummaryVectorIndexFromChat_ACU } from '../../service/vector/summary-vector-index-chat-service';
+import { testSummaryVectorRecallNow_ACU } from '../../service/vector/summary-vector-index-runtime';
+import {
+  getLatestSummaryVectorRecallDiagnostics_ACU,
+  type SummaryVectorRecallDiagnostics_ACU,
+} from '../../service/vector/summary-vector-recall-cache';
+import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../../service/runtime/state-manager';
 import { defaultVectorMemoryConfig_ACU } from '../../shared/defaults';
 import type {
   SummaryVectorIndexHealthReport_ACU,
@@ -76,6 +83,9 @@ export interface VectorIndexForm {
   minScore: number;
   recallCandidateLimit: number;
   recentFixedInjectCount: number;
+  summaryIndexSharedTotalLimit: number;
+  summaryIndexVectorColumns: string[];
+  summaryIndexPlotInjectColumns: string[];
   vectorNamespace: string;
   // 归档分块
   summaryChunkSentenceCount: number;
@@ -86,7 +96,10 @@ export interface VectorIndexForm {
   summaryIndexV2WriteScopeAllowlistText: string;
   summaryIndexContentPackWriteEnabled: boolean;
   summaryIndexContentPackWriteScopeAllowlistText: string;
-  // 关键词生成
+  // 关键词生成与回退检索
+  keywordGenerationEnabled: boolean;
+  queryStripTags: string;
+  queryTailCharLimit: number;
   keywordApiPreset: string;
   keywordContextPairCount: number;
   keywordGenerationMaxAttempts: number;
@@ -142,6 +155,9 @@ function createEmptyForm(): VectorIndexForm {
     minScore: defaults.minScore,
     recallCandidateLimit: defaults.recallCandidateLimit,
     recentFixedInjectCount: defaults.recentFixedInjectCount,
+    summaryIndexSharedTotalLimit: (defaults as any).summaryIndexSharedTotalLimit ?? 0,
+    summaryIndexVectorColumns: Array.isArray((defaults as any).summaryIndexVectorColumns) ? [...(defaults as any).summaryIndexVectorColumns] : [],
+    summaryIndexPlotInjectColumns: Array.isArray((defaults as any).summaryIndexPlotInjectColumns) ? [...(defaults as any).summaryIndexPlotInjectColumns] : [],
     vectorNamespace: defaults.vectorNamespace || 'chat',
     summaryChunkSentenceCount: defaults.summaryChunkSentenceCount,
     summaryIndexArchiveMaxConcurrency: defaults.summaryIndexArchiveMaxConcurrency ?? 30,
@@ -151,6 +167,9 @@ function createEmptyForm(): VectorIndexForm {
     summaryIndexV2WriteScopeAllowlistText: Array.isArray(defaults.summaryIndexV2WriteScopeAllowlist) ? defaults.summaryIndexV2WriteScopeAllowlist.join('\n') : '',
     summaryIndexContentPackWriteEnabled: defaults.summaryIndexContentPackWriteEnabled === true,
     summaryIndexContentPackWriteScopeAllowlistText: Array.isArray(defaults.summaryIndexContentPackWriteScopeAllowlist) ? defaults.summaryIndexContentPackWriteScopeAllowlist.join('\n') : '',
+    keywordGenerationEnabled: (defaults as any).keywordGenerationEnabled !== false,
+    queryStripTags: (defaults as any).queryStripTags || '',
+    queryTailCharLimit: (defaults as any).queryTailCharLimit ?? 400,
     keywordApiPreset: defaults.keywordApiPreset || '',
     keywordContextPairCount: defaults.keywordContextPairCount,
     keywordGenerationMaxAttempts: defaults.keywordGenerationMaxAttempts,
@@ -207,6 +226,10 @@ export function useVectorIndexConfig() {
   const healthReport = ref<SummaryVectorIndexHealthReport_ACU | null>(null);
   const displayRowCount = ref(0);
   const displayChunkCount = ref(0);
+  const detectedSummaryColumns = ref<string[]>([]);
+  const recallDiagnostics = ref<SummaryVectorRecallDiagnostics_ACU | null>(null);
+  const testUserInput = ref('');
+  const testRecallBusy = ref(false);
   let progressToastId: string | null = null;
 
   function notify(kind: MessageKind, text: string, options: { durationMs?: number; muteable?: boolean } = {}): void {
@@ -240,6 +263,13 @@ export function useVectorIndexConfig() {
     form.minScore = config.minScore;
     form.recallCandidateLimit = config.recallCandidateLimit;
     form.recentFixedInjectCount = config.recentFixedInjectCount;
+    form.summaryIndexSharedTotalLimit = Number((config as any).summaryIndexSharedTotalLimit) || 0;
+    form.summaryIndexVectorColumns = Array.isArray((config as any).summaryIndexVectorColumns)
+      ? [...(config as any).summaryIndexVectorColumns]
+      : [];
+    form.summaryIndexPlotInjectColumns = Array.isArray((config as any).summaryIndexPlotInjectColumns)
+      ? [...(config as any).summaryIndexPlotInjectColumns]
+      : [];
     form.vectorNamespace = config.vectorNamespace || 'chat';
     form.summaryChunkSentenceCount = config.summaryChunkSentenceCount;
     form.summaryIndexArchiveMaxConcurrency = config.summaryIndexArchiveMaxConcurrency;
@@ -249,15 +279,56 @@ export function useVectorIndexConfig() {
     form.summaryIndexV2WriteScopeAllowlistText = Array.isArray(config.summaryIndexV2WriteScopeAllowlist) ? config.summaryIndexV2WriteScopeAllowlist.join('\n') : '';
     form.summaryIndexContentPackWriteEnabled = config.summaryIndexContentPackWriteEnabled === true;
     form.summaryIndexContentPackWriteScopeAllowlistText = Array.isArray(config.summaryIndexContentPackWriteScopeAllowlist) ? config.summaryIndexContentPackWriteScopeAllowlist.join('\n') : '';
+    form.keywordGenerationEnabled = (config as any).keywordGenerationEnabled !== false;
+    form.queryStripTags = typeof (config as any).queryStripTags === 'string' ? (config as any).queryStripTags : '';
+    form.queryTailCharLimit = Number((config as any).queryTailCharLimit) || 400;
     form.keywordApiPreset = config.keywordApiPreset || '';
     form.keywordContextPairCount = config.keywordContextPairCount;
     form.keywordGenerationMaxAttempts = config.keywordGenerationMaxAttempts;
+    try {
+      detectedSummaryColumns.value = typeof getSummaryTableColumnNames_ACU === 'function'
+        ? getSummaryTableColumnNames_ACU()
+        : [];
+    } catch {
+      detectedSummaryColumns.value = [];
+    }
     promptSegments.value = cloneSegments(config.keywordPromptGroup);
     promptDirty.value = false;
   }
 
+  function refreshRecallDiagnostics(): void {
+    recallDiagnostics.value = getLatestSummaryVectorRecallDiagnostics_ACU(
+      currentChatFileIdentifier_ACU || undefined,
+      getCurrentIsolationKey_ACU(),
+    );
+  }
+
+  async function runRecallDryTest(): Promise<void> {
+    if (testRecallBusy.value) return;
+    testRecallBusy.value = true;
+    try {
+      const result = await testSummaryVectorRecallNow_ACU(testUserInput.value);
+      if (result.diagnostics) {
+        recallDiagnostics.value = result.diagnostics;
+      } else {
+        refreshRecallDiagnostics();
+      }
+      if (result.success && !result.skipped) {
+        toast.success(`试跑完成：共命中 ${result.injectedCount || 0} 条（${result.diagnostics?.rerankStatus === 'failed' ? 'Rerank 失败已回退' : result.diagnostics?.rerankStatus === 'applied' ? '已执行 Rerank' : '仅向量/BM25'}）。`);
+      } else {
+        toast.warning(`试跑未命中或跳过：${result.reason || 'unknown'}`);
+      }
+    } catch (error: any) {
+      refreshRecallDiagnostics();
+      toast.error(`召回试跑失败：${error?.message || '未知错误'}`);
+    } finally {
+      testRecallBusy.value = false;
+    }
+  }
+
   function refresh(): void {
     readFromConfig();
+    refreshRecallDiagnostics();
     runValidation();
   }
 
@@ -272,7 +343,7 @@ export function useVectorIndexConfig() {
   }
 
   function setApiField<
-    K extends 'vectorNamespace' | 'keywordApiPreset',
+    K extends 'vectorNamespace' | 'keywordApiPreset' | 'queryStripTags',
   >(key: K, raw: string | number): void {
     const value = typeof raw === 'string' ? raw : String(raw ?? '');
     const next = key.endsWith('ApiKey') ? value : value.trim();
@@ -290,7 +361,7 @@ export function useVectorIndexConfig() {
     K extends 'summaryIndexKeywordMinRows' | 'topK' | 'recallCandidateLimit'
       | 'recentFixedInjectCount' | 'summaryChunkSentenceCount'
       | 'summaryIndexArchiveMaxConcurrency' | 'keywordContextPairCount'
-      | 'keywordGenerationMaxAttempts'
+      | 'keywordGenerationMaxAttempts' | 'queryTailCharLimit'
       | 'summaryIndexRollingDeltaFoldThreshold',
   >(key: K, raw: number | string): void {
     if (key === 'recentFixedInjectCount') {
@@ -343,10 +414,46 @@ export function useVectorIndexConfig() {
     pushSavedMessage();
   }
 
+  function setNonNegativeNumberField<
+    K extends 'summaryIndexSharedTotalLimit',
+  >(key: K, raw: number | string): void {
+    const parsed = Number(raw);
+    const num = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
+    (form as any)[key] = num;
+    const result = updateGlobalVectorMemoryConfigFields_ACU({ [key]: num });
+    if (!result.ok) {
+      toast.error(result.message || '保存失败。');
+      return;
+    }
+    runValidation();
+    pushSavedMessage();
+  }
+
   function setBooleanField<
-    K extends 'summaryIndexRollingDeltaEnabled' | 'summaryIndexV2WriteEnabled' | 'summaryIndexContentPackWriteEnabled',
+    K extends 'summaryIndexRollingDeltaEnabled' | 'summaryIndexV2WriteEnabled' | 'summaryIndexContentPackWriteEnabled' | 'keywordGenerationEnabled',
   >(key: K, value: boolean): void {
     const next = value === true;
+    (form as any)[key] = next;
+    const result = updateGlobalVectorMemoryConfigFields_ACU({ [key]: next });
+    if (!result.ok) {
+      toast.error(result.message || '保存失败。');
+      return;
+    }
+    runValidation();
+    pushSavedMessage();
+  }
+
+  function toggleColumnSelection(
+    key: 'summaryIndexVectorColumns' | 'summaryIndexPlotInjectColumns',
+    columnName: string,
+    checked: boolean,
+  ): void {
+    const target = String(columnName || '').trim();
+    if (!target) return;
+    const current = Array.isArray((form as any)[key]) ? [...(form as any)[key]] : [];
+    const next = checked
+      ? Array.from(new Set([...current, target]))
+      : current.filter((item) => item !== target);
     (form as any)[key] = next;
     const result = updateGlobalVectorMemoryConfigFields_ACU({ [key]: next });
     if (!result.ok) {
@@ -604,6 +711,17 @@ export function useVectorIndexConfig() {
       { label: '更新时间', value: formatTime(stats?.updatedAt || ''), key: 'updatedAt' },
     ];
   });
+  const availableSummaryColumns = computed<string[]>(() => {
+    const base = detectedSummaryColumns.value.length > 0
+      ? detectedSummaryColumns.value
+      : ['编码索引', '时间跨度', '概览', '纪要', '重要对话'];
+    return Array.from(new Set([
+      ...base,
+      ...form.summaryIndexVectorColumns,
+      ...form.summaryIndexPlotInjectColumns,
+    ])).filter((col) => col !== '编码索引');
+  });
+
   const promptTemplateMode = computed<'default' | 'custom'>(() =>
     promptFingerprint(promptSegments.value) === promptFingerprint(defaultKeywordPromptGroup())
       ? 'default'
@@ -627,8 +745,14 @@ export function useVectorIndexConfig() {
     statusLabel,
     statusVariant,
     statusStatsItems,
+    availableSummaryColumns,
     promptTemplateMode,
+    recallDiagnostics,
+    testUserInput,
+    testRecallBusy,
     refresh,
+    refreshRecallDiagnostics,
+    runRecallDryTest,
     refreshIndexStatus,
     clearIndexCache,
     deleteCurrentIndex,
@@ -636,7 +760,9 @@ export function useVectorIndexConfig() {
     previewRecentFixedInjectCount,
     setApiField,
     setNumberField,
+    setNonNegativeNumberField,
     setBooleanField,
+    toggleColumnSelection,
     setV2WriteScopeAllowlist,
     setMinScore,
     addPromptSegment,

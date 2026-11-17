@@ -217,6 +217,12 @@ export const defaultVectorMemoryConfig_ACU = {
   summaryPromptGroupId: 'remote-memory-archive-default',
   archiveWithoutSummary: false,
   recentFixedInjectCount: 50,
+  summaryIndexSharedTotalLimit: 0,
+  summaryIndexVectorColumns: [] as string[],
+  summaryIndexPlotInjectColumns: [] as string[],
+  keywordGenerationEnabled: true,
+  queryStripTags: '',
+  queryTailCharLimit: 400,
   // V2 writer 已在生产开启：新装或未显式配置的用户默认走 V2 归档路径。
   // 若需临时熔断，只能通过前端开关或运维显式改为 false；关闭只阻止新写入，绝不回退覆盖旧对象。
   summaryIndexV2WriteEnabled: true,
