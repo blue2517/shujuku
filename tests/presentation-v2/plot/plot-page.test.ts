@@ -619,4 +619,35 @@ describe('PlotPage', () => {
 
     mount.__resetAcuV2MountForTests();
   });
+
+  it('剧情推进页渲染 AI 上下文与世界书扫描深度设置并可修改保存', async () => {
+    const settings = createSettings();
+    settings.plotSettings.contextTurnCount = 4;
+    settings.plotSettings.worldbookScanDepth = 1;
+
+    const { mount } = await mountPlotPage({ settings });
+    await new Promise(r => setTimeout(r, 50));
+
+    const pageText = document.querySelector('.acu-v2-plot-page')?.textContent || '';
+    expect(pageText).toContain('AI 上下文');
+    expect(pageText).toContain('世界书扫描深度');
+
+    const turnInput = document.querySelector('[data-acu-plot-field="contextTurnCount"] input') as HTMLInputElement | null;
+    const scanInput = document.querySelector('[data-acu-plot-field="worldbookScanDepth"] input') as HTMLInputElement | null;
+    expect(turnInput).not.toBeNull();
+    expect(scanInput).not.toBeNull();
+    expect(turnInput!.value).toBe('4');
+    expect(scanInput!.value).toBe('1');
+
+    turnInput!.value = '2';
+    turnInput!.dispatchEvent(new Event('change'));
+    scanInput!.value = '0';
+    scanInput!.dispatchEvent(new Event('change'));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(settings.plotSettings.contextTurnCount).toBe(2);
+    expect(settings.plotSettings.worldbookScanDepth).toBe(0);
+
+    mount.__resetAcuV2MountForTests();
+  });
 });

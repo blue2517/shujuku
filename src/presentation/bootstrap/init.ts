@@ -1,13 +1,12 @@
 // init.ts — 初始化编排（presentation 层：负责事件绑定、UI 初始化、模块串联）
 // 从 05_core_tail.js 迁入
 
-import { DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
 import { cancelPendingChatMutationRefresh_ACU, scheduleChatMutationRefresh_ACU } from './chat-mutation-scheduler';
 import { showToastr_ACU } from '../theme/toast';
 import { attemptToLoadCoreApis_ACU } from '../triggers/settings-ui-sync/settings-ui-connect';
 import { ensureInitialSeedCheckpoint_ACU, handleChatCompletionReady_ACU, loadPresetAndCleanCharacterData_ACU } from '../../service/runtime/helpers-remaining';
 import { SillyTavern_API_ACU } from '../../shared/host-api';
-import { currentChatFileIdentifier_ACU, discardLatestGenerationContext_ACU, generationGate_ACU, getCurrentIsolationKey_ACU, markUserSendIntent_ACU, isProcessing_Plot_ACU, isQuietLikeGeneration_ACU, isRecentUserSendIntent_ACU, loopState_ACU, recordGenerationContext_ACU, recordLastUserSend_ACU, settings_ACU, shouldProcessAutoTableUpdateForGenerationEnded_ACU, shouldProcessPlotForGeneration_ACU, shouldProcessSummaryVectorIndexForGeneration_ACU, _set_allChatMessages_ACU, _set_currentChatFileIdentifier_ACU, _set_currentJsonTableData_ACU, _set_independentTableStates_ACU, _set_isProcessing_Plot_ACU, _set_lastTotalAiMessages_ACU} from '../../service/runtime/state-manager';
+import { currentChatFileIdentifier_ACU, discardLatestGenerationContext_ACU, generationGate_ACU, getCurrentIsolationKey_ACU, markUserSendIntent_ACU, isProcessing_Plot_ACU, isQuietLikeGeneration_ACU, isRecentUserSendIntent_ACU, recordGenerationContext_ACU, recordLastUserSend_ACU, settings_ACU, shouldProcessAutoTableUpdateForGenerationEnded_ACU, shouldProcessPlotForGeneration_ACU, shouldProcessSummaryVectorIndexForGeneration_ACU, _set_allChatMessages_ACU, _set_currentChatFileIdentifier_ACU, _set_currentJsonTableData_ACU, _set_independentTableStates_ACU, _set_isProcessing_Plot_ACU, _set_lastTotalAiMessages_ACU} from '../../service/runtime/state-manager';
 import { applyTemplateScopeForCurrentChat_ACU, loadSettings_ACU } from '../../service/settings/settings-service';
 import { resetScriptStateForNewChat_ACU } from '../../service/worldbook/injection-engine';
 import { resetPlotAgentWorldbookSessionSnapshot_ACU } from '../../service/agent/agent-worldbook-takeover';
@@ -22,7 +21,6 @@ import { shouldSkipPlotIntercept_ACU } from '../../service/plot/plot-logic';
 import { orchestrateTavernHelperHook_ACU, orchestrateAfterCommandsStrategy1_ACU, orchestrateAfterCommandsStrategy2_ACU } from '../../service/plot/plot-orchestrator';
 import { getSendTextareaValue_ACU, setSendTextareaValue_ACU } from '../../shared/host-input';
 import { handleNewMessageDebounced_ACU } from '../triggers/settings-ui-sync/settings-ui-connect';
-import { enterLoopRetryFlow_ACU, onLoopGenerationEnded_ACU, stopAutoLoop_ACU } from '../triggers/auto-loop';
 import { runOptimizationLogicWithUI_ACU } from '../components/plot-planning-ui';
 import { processSummaryVectorIndexBeforeGenerationWithUI_ACU, rebuildCurrentSummaryVectorIndexWithUI_ACU, shouldRebuildSummaryVectorIndexWithUI_ACU } from '../components/summary-vector-index-ui';
 import { preloadSummaryVectorIndexCacheForCurrentChat_ACU } from '../../service/vector/summary-vector-index-cache-service';
@@ -183,11 +181,7 @@ export   function mainInitialize_ACU() {
 
           // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）          installSendIntentCaptureHooks_ACU();
 
-          // [剧情推进] 切换聊天时停止循环并加载预设
-          if (loopState_ACU.isLooping) {
-            stopAutoLoop_ACU();
-            showToastr_ACU('info', '切换聊天，自动化循环已停止。');
-          }
+          // [剧情推进] 加载预设
           await loadPresetAndCleanCharacterData_ACU();
 
           // [剧情推进] TavernHelper钩子：拦截直接的JS调用
@@ -222,12 +216,6 @@ export   function mainInitialize_ACU() {
                 const result = await orchestrateTavernHelperHook_ACU(options, runOptimizationLogicWithUI_ACU);
 
                 switch (result.action) {
-                  case 'loop_retry': {
-                    const loopSettings = settings_ACU.plotSettings.loopSettings || DEFAULT_PLOT_SETTINGS_ACU.loopSettings;
-                    loopState_ACU.awaitingReply = false;
-                    await enterLoopRetryFlow_ACU({ loopSettings, shouldDeleteAiReply: false });
-                    return;
-                  }
                   case 'planned': {
                     // UI 操作：写回 options
                     if (result.writeBack) {
@@ -413,9 +401,8 @@ export   function mainInitialize_ACU() {
                   });
                 }
 
-                // [剧情推进] 保存Plot到消息和循环检测
+                // [剧情推进] 保存Plot到消息（原循环检测已移除）
                 // savePlotToLatestMessage_ACU(); // Moved to runOptimizationLogic_ACU
-                onLoopGenerationEnded_ACU();
             };
             if (typeof SillyTavern_API_ACU.eventSource.makeFirst === 'function') {
               SillyTavern_API_ACU.eventSource.makeFirst(SillyTavern_API_ACU.eventTypes.GENERATION_ENDED, onGenerationEnded);
@@ -508,13 +495,6 @@ export   function mainInitialize_ACU() {
                   SillyTavern_API_ACU.eventSource.emit(SillyTavern_API_ACU.eventTypes.MESSAGE_UPDATED, lastMessageIndex);
                   if (getSendTextareaValue_ACU() === s1.originalMessage) setSendTextareaValue_ACU('');
                   break;
-
-                case 'loop_retry': {
-                  const loopSettings = settings_ACU.plotSettings.loopSettings || DEFAULT_PLOT_SETTINGS_ACU.loopSettings;
-                  loopState_ACU.awaitingReply = false;
-                  await enterLoopRetryFlow_ACU({ loopSettings, shouldDeleteAiReply: false });
-                  break;
-                }
                 // 'skipped' — 不做额外操作
               }
               return; // 策略1匹配，不再执行策略2

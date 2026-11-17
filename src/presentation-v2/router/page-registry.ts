@@ -15,7 +15,6 @@ import TablePage from '../pages/TablePage.vue';
 import ApiPage from '../pages/ApiPage.vue';
 import PlotPage from '../pages/PlotPage.vue';
 import AgentPage from '../pages/AgentPage.vue';
-import ContinuationPage from '../pages/ContinuationPage.vue';
 import ImportPage from '../pages/ImportPage.vue';
 import VectorIndexPage from '../pages/VectorIndexPage.vue';
 import DataMgmtPage from '../pages/DataMgmtPage.vue';
@@ -30,7 +29,6 @@ export const FEATURE_GATE_CONTENT_REPLACE = 'content-replace';
 /** 兼容旧 UI 隐藏开关：智能续写/剧情循环失败上限等于 49 时，仪表盘才显示正文替换启用开关。 */
 export const CONTENT_REPLACE_UNLOCK_MAX_RETRIES = 49;
 export const FEATURE_GATE_PLOT = 'plot';
-export const FEATURE_GATE_CONTINUATION = 'continuation';
 export const FEATURE_GATE_IMPORT = 'import';
 export const FEATURE_GATE_VECTOR_INDEX = 'vector-index';
 export const ACU_V2_BASIC_PAGE_ID = 'basic-config';
@@ -50,7 +48,6 @@ export const ACU_V2_PAGE_REGISTRY: readonly AcuV2Page[] = Object.freeze([
   { id: 'api', title: 'API', group: 'config', component: markRaw(ApiPage) },
 
   // 功能
-  { id: 'continuation', title: '智能续写', group: 'feature', component: markRaw(ContinuationPage), featureGate: FEATURE_GATE_CONTINUATION },
   { id: 'import', title: '外部导入', group: 'feature', component: markRaw(ImportPage), featureGate: FEATURE_GATE_IMPORT },
   { id: 'vector-index', title: '交火模式', group: 'feature', component: markRaw(VectorIndexPage), featureGate: FEATURE_GATE_VECTOR_INDEX },
   {

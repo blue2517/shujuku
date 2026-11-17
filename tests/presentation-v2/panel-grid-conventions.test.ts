@@ -7,7 +7,6 @@ const panelGridPages = [
   'ApiPage.vue',
   'BasicConfigPage.vue',
   'ContentReplacePage.vue',
-  'ContinuationPage.vue',
   'DataMgmtPage.vue',
   'DashboardPage.vue',
   'DeveloperPage.vue',

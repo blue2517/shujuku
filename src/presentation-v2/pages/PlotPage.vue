@@ -1,7 +1,7 @@
 <template>
   <section class="acu-v2-plot-page">
     <AcuPanelGrid class="acu-v2-plot-page__grid">
-      <PlotPresetPanel />
+      <PlotPresetPanel :show-context-settings="true" />
 
       <!-- 世界书选择 -->
       <AcuPanel

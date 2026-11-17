@@ -43,7 +43,6 @@ import {
   shouldProcessTavernHelperHook_ACU,
   extractUserMessageFromOptions_ACU,
   applyPlanningResultToOptions_ACU,
-  shouldEnterLoopRetryOnPlanningFailure_ACU,
   prepareStrategy1Context_ACU,
   orchestrateTavernHelperHook_ACU,
   orchestrateAfterCommandsStrategy1_ACU,
@@ -70,10 +69,6 @@ describe('shouldProcessTavernHelperHook_ACU', () => {
   });
   it('飞行模式开启时返回 false', () => {
     mockFlightModeActive.mockReturnValue(true);
-    expect(shouldProcessTavernHelperHook_ACU({})).toBe(false);
-  });
-  it('重试中返回 false', () => {
-    mockLoopState.isRetrying = true;
     expect(shouldProcessTavernHelperHook_ACU({})).toBe(false);
   });
   it('should_stream 返回 false', () => {
@@ -114,23 +109,6 @@ describe('applyPlanningResultToOptions_ACU', () => {
   it('默认写回 user_input', () => {
     const result = applyPlanningResultToOptions_ACU({}, '新内容');
     expect(result.target).toBe('user_input');
-  });
-});
-
-// ═══ shouldEnterLoopRetryOnPlanningFailure_ACU ═══
-describe('shouldEnterLoopRetryOnPlanningFailure_ACU', () => {
-  it('循环模式下规划失败返回 true', () => {
-    mockLoopState.isLooping = true;
-    mockLoopState.awaitingReply = true;
-    expect(shouldEnterLoopRetryOnPlanningFailure_ACU(null)).toBe(true);
-  });
-  it('非循环模式返回 false', () => {
-    expect(shouldEnterLoopRetryOnPlanningFailure_ACU(null)).toBe(false);
-  });
-  it('有有效消息返回 false', () => {
-    mockLoopState.isLooping = true;
-    mockLoopState.awaitingReply = true;
-    expect(shouldEnterLoopRetryOnPlanningFailure_ACU('有效消息')).toBe(false);
   });
 });
 
@@ -183,13 +161,6 @@ describe('orchestrateTavernHelperHook_ACU', () => {
     const runPlanning = vi.fn().mockResolvedValue({ aborted: true });
     const result = await orchestrateTavernHelperHook_ACU({ user_input: '继续' }, runPlanning);
     expect(result.action).toBe('aborted');
-  });
-  it('循环模式规划失败返回 loop_retry', async () => {
-    mockLoopState.isLooping = true;
-    mockLoopState.awaitingReply = true;
-    const runPlanning = vi.fn().mockResolvedValue(null);
-    const result = await orchestrateTavernHelperHook_ACU({ user_input: '继续' }, runPlanning);
-    expect(result.action).toBe('loop_retry');
   });
   it('规划异常时透传', async () => {
     const runPlanning = vi.fn().mockRejectedValue(new Error('规划失败'));

@@ -225,53 +225,22 @@ export function generateCoreFuncTabHTML(): string {
                             </div>
                         </div>
 
-                        <!-- 自动循环设置区域 -->
+                        <!-- 上下文与世界书设置区域 -->
                         <div class="settings-section" style="padding: 20px; background: var(--acu-bg-2); border-radius: 8px; border: 1px solid var(--acu-border);">
                             <h4 style="margin: 0 0 15px 0; color: var(--acu-text-1); display: flex; align-items: center; gap: 8px;">
-                                <i class="fa-solid fa-sync-alt"></i> 智能续写
+                                <i class="fa-solid fa-sliders"></i> 上下文与世界书扫描
                             </h4>
 
-                            <div style="display: grid; gap: 15px; margin-bottom: 20px;">
-                                <div class="qrf_settings_block" style="margin-bottom: 0;">
-                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                        <label style="font-weight: 500; margin: 0;">循环提示词列表</label>
-                                        <button type="button" id="${SCRIPT_ID_PREFIX_ACU}-plot-add-prompt" class="button" style="padding: 4px 12px; font-size: 0.85em; display: flex; align-items: center; gap: 4px;">
-                                            <i class="fa-solid fa-plus"></i> 添加提示词
-                                        </button>
-                                    </div>
-                                    <div id="${SCRIPT_ID_PREFIX_ACU}-plot-prompts-container" style="display: grid; gap: 10px;">
-                                        <!-- 提示词项将动态添加到这里 -->
-                                    </div>
-                                    <small class="notes">可以添加多个提示词，循环时会自动依次使用，增加剧情变化</small>
-                                </div>
-
-                                <div class="qrf_settings_block" style="margin-bottom: 0;">
-                                    <label for="${SCRIPT_ID_PREFIX_ACU}-plot-loop-tags" style="font-weight: 500;">标签验证</label>
-                                    <input id="${SCRIPT_ID_PREFIX_ACU}-plot-loop-tags" type="text" class="text_pole" placeholder="例如: content, thinking" style="width: 100%;">
-                                    <small class="notes">输入必须存在于AI回复中的标签，多个标签用逗号分隔。缺少任意标签将重试</small>
-                                </div>
-                            </div>
-
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-bottom: 20px;">
-                                <div class="qrf_settings_block" style="margin-bottom: 0;">
-                                    <label for="${SCRIPT_ID_PREFIX_ACU}-plot-loop-delay" style="font-weight: 500;">循环延时</label>
-                                    <input id="${SCRIPT_ID_PREFIX_ACU}-plot-loop-delay" type="number" class="text_pole" min="0" step="1" value="5" style="width: 100%;">
-                                    <small class="notes" style="color: var(--acu-text-2);">秒</small>
-                                </div>
-                                <div class="qrf_settings_block" style="margin-bottom: 0;">
-                                    <label for="${SCRIPT_ID_PREFIX_ACU}-plot-loop-total-duration" style="font-weight: 500;">总时长</label>
-                                    <input id="${SCRIPT_ID_PREFIX_ACU}-plot-loop-total-duration" type="number" class="text_pole" min="0" step="1" value="0" placeholder="60" style="width: 100%;">
-                                    <small class="notes" style="color: var(--acu-text-2);">分钟</small>
-                                </div>
-                                <div class="qrf_settings_block" style="margin-bottom: 0;">
-                                    <label for="${SCRIPT_ID_PREFIX_ACU}-plot-max-retries" style="font-weight: 500;">自动循环失败上限</label>
-                                    <input id="${SCRIPT_ID_PREFIX_ACU}-plot-max-retries" type="number" class="text_pole" min="0" step="1" value="3" style="width: 100%;">
-                                    <small class="notes" style="color: var(--acu-text-2);">仅用于自动循环流程，不影响单个任务的 API 重试次数</small>
-                                </div>
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px;">
                                 <div class="qrf_settings_block" style="margin-bottom: 0;">
                                     <label for="${SCRIPT_ID_PREFIX_ACU}-plot-context-turn-count" style="font-weight: 500;">AI上下文</label>
                                     <input id="${SCRIPT_ID_PREFIX_ACU}-plot-context-turn-count" type="number" class="text_pole" min="0" max="20" step="1" value="3" style="width: 100%;">
                                     <small class="notes" style="color: var(--acu-text-2);">AI输出楼层数（仅计算AI回复，不含用户输入）</small>
+                                </div>
+                                <div class="qrf_settings_block" style="margin-bottom: 0;">
+                                    <label for="${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-scan-depth" style="font-weight: 500;">世界书扫描深度</label>
+                                    <input id="${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-scan-depth" type="number" class="text_pole" min="0" max="20" step="1" value="3" style="width: 100%;">
+                                    <small class="notes" style="color: var(--acu-text-2);">回看聊天消息数（本轮输入另行附加；设 1 = 上次AI回复+本轮输入，设 0 = 仅本轮输入）</small>
                                 </div>
                             </div>
 
@@ -328,25 +297,6 @@ export function generateCoreFuncTabHTML(): string {
                                     <div id="${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-entry-list" class="qrf_worldbook_entry_list">
                                         <!-- 条目将动态加载于此 -->
                                     </div>
-                                </div>
-                            </div>
-
-                            <!-- 循环控制区域 -->
-                            <div style="border-top: 1px solid var(--acu-border); padding-top: 20px;">
-                                <div id="${SCRIPT_ID_PREFIX_ACU}-plot-loop-status-indicator" style="text-align: center; margin-bottom: 15px; padding: 10px; background: var(--acu-bg-1); border-radius: 6px; border: 1px solid var(--acu-border);">
-                                    <div style="font-weight: 600; color: var(--acu-text-1); margin-bottom: 5px;">循环状态</div>
-                                    <div style="color: var(--acu-text-2);">
-                                        <span id="${SCRIPT_ID_PREFIX_ACU}-plot-loop-status-text">未运行</span>
-                                        <span id="${SCRIPT_ID_PREFIX_ACU}-plot-loop-timer-display" style="display:none; margin-left: 10px; color: var(--acu-text-3);"></span>
-                                    </div>
-                                </div>
-                                <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap;">
-                                    <button id="${SCRIPT_ID_PREFIX_ACU}-plot-start-loop-btn" class="menu_button" style="padding: 12px 25px; background: var(--acu-success); color: white; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; min-width: 140px; display: inline-flex; align-items: center; gap: 8px; justify-content: center;">
-                                        <i class="fas fa-play"></i> 开始循环
-                                    </button>
-                                    <button id="${SCRIPT_ID_PREFIX_ACU}-plot-stop-loop-btn" class="menu_button" style="display: none; padding: 12px 25px; background: var(--acu-danger) !important; color: #fff !important; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; min-width: 140px; display: inline-flex; align-items: center; gap: 8px; justify-content: center;">
-                                        <i class="fas fa-stop"></i> 停止循环
-                                    </button>
                                 </div>
                             </div>
                         </div>

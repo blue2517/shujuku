@@ -73,6 +73,37 @@
       />
     </AcuFormRow>
 
+    <div v-if="showContextSettings" class="acu-plot-preset-panel__context-grid">
+      <AcuFormRow
+        label="AI 上下文"
+        hint="仅统计 AI 最新 N 个楼层回复，不统计用户输入。"
+      >
+        <AcuInput
+          :model-value="store.contextTurnCount"
+          type="number"
+          :min="0"
+          :max="20"
+          :step="1"
+          data-acu-plot-field="contextTurnCount"
+          @change="store.setContextTurnCount($event)"
+        />
+      </AcuFormRow>
+      <AcuFormRow
+        label="世界书扫描深度"
+        hint="扫描世界书关键词时回看的历史消息数（本轮输入另行附加；设 1 = 上次 AI 回复 + 本轮输入，设 0 = 仅本轮输入）。"
+      >
+        <AcuInput
+          :model-value="store.worldbookScanDepth"
+          type="number"
+          :min="0"
+          :max="20"
+          :step="1"
+          data-acu-plot-field="worldbookScanDepth"
+          @change="store.setWorldbookScanDepth($event)"
+        />
+      </AcuFormRow>
+    </div>
+
     <PlotPresetDrawer
       :is-open="management.isDrawerOpen.value"
       :view="management.drawerView.value"
@@ -122,6 +153,7 @@ import AcuBadge from "./_lib/AcuBadge.vue";
 import AcuFileButton from "./_lib/AcuFileButton.vue";
 import AcuFormRow from "./_lib/AcuFormRow.vue";
 import AcuIconButton from "./_lib/AcuIconButton.vue";
+import AcuInput from "./_lib/AcuInput.vue";
 import AcuPanel from "./_lib/AcuPanel.vue";
 import type { PresetDropdownItem } from "./_lib/AcuPresetDropdown.vue";
 import AcuPresetDropdown from "./_lib/AcuPresetDropdown.vue";
@@ -133,10 +165,12 @@ withDefaults(
   defineProps<{
     showEdit?: boolean;
     showApiPreset?: boolean;
+    showContextSettings?: boolean;
   }>(),
   {
     showEdit: true,
     showApiPreset: true,
+    showContextSettings: false,
   },
 );
 
@@ -246,5 +280,18 @@ watch(useChatChangedTick(), refreshAll);
   align-items: stretch;
   margin-bottom: 12px;
   min-width: 0;
+}
+
+.acu-plot-preset-panel__context-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+@media (max-width: 640px) {
+  .acu-plot-preset-panel__context-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

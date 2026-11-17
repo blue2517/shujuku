@@ -18,41 +18,6 @@ import { saveApiPreset_ACU as serviceSaveApiPreset_ACU, deleteApiPreset_ACU as s
  * 从 service/runtime/helpers-remaining.ts 提取的纯 UI 函数
  */
 
-  // --- 循环 UI ---
-
-  /**
-   * 更新循环UI状态
-
-   */
-  export function updateLoopUIStatus_ACU(isRunning: boolean) {
-    if (!$popupInstance_ACU) return;
-    const $startBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-start-loop-btn`);
-    const $stopBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-stop-loop-btn`);
-    const $statusText = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-status-text`);
-    const $timerDisplay = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-timer-display`);
-
-    if (isRunning) {
-      $startBtn.hide();
-      $stopBtn.css('display', 'inline-flex').show();
-      $statusText.text('运行中').css('color', 'var(--green, #4CAF50)');
-      $timerDisplay.show();
-    } else {
-      $stopBtn.hide();
-      $startBtn.css('display', 'inline-flex').show();
-      $statusText.text('已停止').css('color', 'var(--red, #f44336)');
-      $timerDisplay.hide().text('');
-    }
-  }
-
-  /**
-   * 更新循环倒计时显示
-   */
-  export function updateLoopTimerDisplay_ACU(timeLeftFormatted: string) {
-    if (!$popupInstance_ACU) return;
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-loop-timer-display`).text(`(剩余: ${timeLeftFormatted})`);
-  }
-
-
   // --- API / 设置 UI ---
   export function updateApiModeView_ACU(apiMode: string) {
     if (!$popupInstance_ACU) return;

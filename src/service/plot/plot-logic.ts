@@ -507,6 +507,13 @@ export function applyPlotPresetToSettings_ACU(plotSettings: Record<string, any>,
     plotSettings.contextExcludeRules = normalizeExcludeRules_ACU(normalizedPreset.contextExcludeRules, normalizedPreset.contextExcludeTags || '');
     plotSettings.minLength = normalizedPreset.minLength ?? 0;
     plotSettings.contextTurnCount = normalizedPreset.contextTurnCount ?? 3;
+    if (
+      normalizedPreset.worldbookScanDepth !== undefined &&
+      normalizedPreset.worldbookScanDepth !== null &&
+      Number.isFinite(Number(normalizedPreset.worldbookScanDepth))
+    ) {
+      plotSettings.worldbookScanDepth = Math.max(0, Math.trunc(Number(normalizedPreset.worldbookScanDepth)));
+    }
     if (normalizedPreset.loopSettings) {
       plotSettings.loopSettings = { ...plotSettings.loopSettings, ...normalizedPreset.loopSettings };
     }

@@ -45,6 +45,16 @@ interface PlotPresetState {
   pageApiPresetName: string;
   /** 任务 API 单独选择表：taskId -> presetName。 */
   taskApiOverrides: Record<string, string>;
+  /** 剧情推进 AI 上下文层数（仅统计 AI 回复）。 */
+  contextTurnCount: number;
+  /** 剧情推进世界书扫描深度（回看聊天消息条数；0 = 仅扫描本轮用户输入）。 */
+  worldbookScanDepth: number;
+}
+
+function toClampedInteger(value: unknown, fallback: number, min = 0, max = 20): number {
+  const n = typeof value === 'number' ? value : Number(String(value ?? '').trim());
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
 }
 
 function clone<T>(value: T): T {
@@ -149,6 +159,8 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
     activePresetName: '',
     pageApiPresetName: '',
     taskApiOverrides: {},
+    contextTurnCount: 3,
+    worldbookScanDepth: 3,
   }),
   getters: {
     activePreset(state): AcuV2PlotPreset | null {
@@ -187,6 +199,10 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
         if (typeof v === 'string' && v.trim()) cleaned[k] = v.trim();
       }
       this.taskApiOverrides = cleaned;
+      const defaultTurnCount = toClampedInteger(DEFAULT_PLOT_SETTINGS_ACU.contextTurnCount, 3);
+      this.contextTurnCount = toClampedInteger(plot.contextTurnCount, defaultTurnCount);
+      const defaultScanDepth = toClampedInteger(DEFAULT_PLOT_SETTINGS_ACU.worldbookScanDepth, this.contextTurnCount);
+      this.worldbookScanDepth = toClampedInteger(plot.worldbookScanDepth, this.contextTurnCount ?? defaultScanDepth);
     },
 
     /** 设置剧情推进总开关。 */
@@ -264,6 +280,40 @@ export const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
         if (typeof v === 'string' && v.trim()) cleaned[k] = v.trim();
       }
       this.taskApiOverrides = cleaned;
+    },
+
+    /** 同步更新上下文或扫描深度配置，并写入当前活动预设。 */
+    setNumericContextField(
+      key: 'contextTurnCount' | 'worldbookScanDepth',
+      value: number | string,
+      fallback: number,
+    ): void {
+      ensureSettingsShape();
+      const plot = settings_ACU.plotSettings as Record<string, any>;
+      const next = toClampedInteger(value, fallback);
+      plot[key] = next;
+      this[key] = next;
+      const activeName = normalizePlotPresetSelectionValue_ACU(this.activePresetName);
+      if (activeName && Array.isArray(plot.promptPresets)) {
+        const target = plot.promptPresets.find((p: any) => p?.name === activeName);
+        if (target && typeof target === 'object') {
+          target[key] = next;
+          this.presets = readPresetList();
+        }
+      }
+      saveSettings_ACU();
+    },
+
+    /** 设置剧情推进 AI 上下文层数（并同步当前活动预设）。 */
+    setContextTurnCount(value: number | string): void {
+      const fallback = toClampedInteger(DEFAULT_PLOT_SETTINGS_ACU.contextTurnCount, 3);
+      this.setNumericContextField('contextTurnCount', value, fallback);
+    },
+
+    /** 设置剧情推进世界书扫描深度（并同步当前活动预设）。 */
+    setWorldbookScanDepth(value: number | string): void {
+      const fallback = toClampedInteger(this.contextTurnCount, 3);
+      this.setNumericContextField('worldbookScanDepth', value, fallback);
     },
 
     /** 创建/覆盖一个全局预设。`originalName` 用于重命名场景。 */

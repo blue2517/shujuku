@@ -6,10 +6,9 @@
  * 不负责：写回消息、清空输入框、停止生成等 UI 操作。
  */
 
-import { isProcessing_Plot_ACU, loopState_ACU, settings_ACU, _set_isProcessing_Plot_ACU } from '../runtime/state-manager';
-import { markPlotIntercept_ACU, shouldSkipPlotIntercept_ACU } from '../plot/plot-logic';
-import { logDebug_ACU, logError_ACU, logWarn_ACU, hashUserInput_ACU } from '../../shared/utils';
-import { DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
+import { isProcessing_Plot_ACU, settings_ACU, _set_isProcessing_Plot_ACU } from '../runtime/state-manager';
+import { markPlotIntercept_ACU } from '../plot/plot-logic';
+import { logDebug_ACU, logError_ACU, hashUserInput_ACU } from '../../shared/utils';
 import { isFlightModeActive_ACU } from '../flight-mode/flight-mode-state';
 
 // ============================================================
@@ -40,7 +39,7 @@ export interface PlotOrchestrationResult {
  * 纯业务逻辑
  */
 export function shouldProcessTavernHelperHook_ACU(options: any): boolean {
-    if (!settings_ACU.plotSettings.enabled || isFlightModeActive_ACU() || isProcessing_Plot_ACU || loopState_ACU.isRetrying || options.should_stream) {
+    if (!settings_ACU.plotSettings.enabled || isFlightModeActive_ACU() || isProcessing_Plot_ACU || options.should_stream) {
         return false;
     }
     return true;
@@ -73,19 +72,6 @@ export function applyPlanningResultToOptions_ACU(
     } else {
         return { target: 'user_input', value: finalMessage };
     }
-}
-
-/**
- * 处理循环模式下规划失败的情况
- * 纯业务逻辑
- * @returns true 表示应该进入重试流程
- */
-export function shouldEnterLoopRetryOnPlanningFailure_ACU(finalMessage: any): boolean {
-    return (
-        loopState_ACU.isLooping &&
-        loopState_ACU.awaitingReply &&
-        (!finalMessage || typeof finalMessage !== 'string')
-    );
 }
 
 /**
@@ -127,8 +113,8 @@ export type PlanningFn = (userMessage: string, options: any) => Promise<string |
  * TavernHelper hook 编排结果
  */
 export interface TavernHelperHookResult {
-    /** 'passthrough' = 不处理直接透传, 'planned' = 规划成功, 'aborted' = 用户中止, 'skipped' = 跳过, 'loop_retry' = 需要循环重试 */
-    action: 'passthrough' | 'planned' | 'aborted' | 'skipped' | 'loop_retry';
+    /** 'passthrough' = 不处理直接透传, 'planned' = 规划成功, 'aborted' = 用户中止, 'skipped' = 跳过 */
+    action: 'passthrough' | 'planned' | 'aborted' | 'skipped';
     /** 规划后的最终消息（action='planned' 时有值） */
     finalMessage?: string;
     /** 写回目标 */
@@ -139,8 +125,8 @@ export interface TavernHelperHookResult {
  * GENERATION_AFTER_COMMANDS 策略1编排结果
  */
 export interface Strategy1Result {
-    /** 'no_match' = 不匹配策略1, 'planned' = 规划成功, 'aborted' = 用户中止, 'skipped' = 跳过, 'loop_retry' = 需要循环重试 */
-    action: 'no_match' | 'planned' | 'aborted' | 'skipped' | 'loop_retry';
+    /** 'no_match' = 不匹配策略1, 'planned' = 规划成功, 'aborted' = 用户中止, 'skipped' = 跳过 */
+    action: 'no_match' | 'planned' | 'aborted' | 'skipped';
     /** 规划后的最终消息 */
     finalMessage?: string;
     /** 是否是手动中止（需要停止生成、删除消息、恢复输入框） */
@@ -213,19 +199,13 @@ export async function orchestrateTavernHelperHook_ACU(
             return { action: 'aborted' };
         }
 
-        // 7. 判断循环模式下规划失败
-        if (shouldEnterLoopRetryOnPlanningFailure_ACU(finalMessage)) {
-            logWarn_ACU('[剧情推进] [Loop] 规划未产生有效回复，按循环重试规则重试。');
-            return { action: 'loop_retry' };
-        }
-
-        // 8. 规划成功，决定写回位置
+        // 7. 规划成功，决定写回位置
         if (finalMessage && typeof finalMessage === 'string') {
             const writeBack = applyPlanningResultToOptions_ACU(options, finalMessage);
             return { action: 'planned', finalMessage, writeBack };
         }
 
-        // 9. 规划返回 null（未启用/失败），透传
+        // 8. 规划返回 null（未启用/失败），透传
         return { action: 'passthrough' };
     } catch (error) {
         logError_ACU('[剧情推进] Error in TavernHelper.generate hook orchestration:', error);
@@ -256,16 +236,9 @@ export async function orchestrateAfterCommandsStrategy1_ACU(
         return { action: 'no_match' };
     }
 
-    const { messageToProcess, originalInputHash } = context;
+    const { messageToProcess } = context;
 
-    // 2. 标记循环模式
-    const isLoopTriggered = loopState_ACU.isLooping && loopState_ACU.awaitingReply;
-    if (isLoopTriggered) {
-        lastMessage._qrf_from_planning = true;
-        logDebug_ACU('[剧情推进] [Loop] 标记规划层消息: _qrf_from_planning=true');
-    }
-
-    // 3. 调用规划
+    // 2. 调用规划
     _set_isProcessing_Plot_ACU(true);
     try {
         const finalMessage = await runPlanning(messageToProcess, {
@@ -273,13 +246,13 @@ export async function orchestrateAfterCommandsStrategy1_ACU(
             hasExistingUserMessage: true,
         });
 
-        // 4. 处理跳过
+        // 3. 处理跳过
         if (finalMessage && (finalMessage as any).skipped) {
             logDebug_ACU('[剧情推进] Planning skipped in Strategy 1 (duplicate).');
             return { action: 'skipped' };
         }
 
-        // 5. 处理中止
+        // 4. 处理中止
         if (finalMessage && (finalMessage as any).aborted) {
             logDebug_ACU('[剧情推进] Generation aborted by user in Strategy 1.');
             return {
@@ -291,13 +264,7 @@ export async function orchestrateAfterCommandsStrategy1_ACU(
             };
         }
 
-        // 6. 判断循环模式下规划失败
-        if (shouldEnterLoopRetryOnPlanningFailure_ACU(finalMessage)) {
-            logWarn_ACU('[剧情推进] [Loop] 规划未产生有效回复，按循环重试规则重试。');
-            return { action: 'loop_retry' };
-        }
-
-        // 7. 规划成功
+        // 5. 规划成功
         if (finalMessage && typeof finalMessage === 'string') {
             return {
                 action: 'planned',
@@ -307,7 +274,7 @@ export async function orchestrateAfterCommandsStrategy1_ACU(
             };
         }
 
-        // 8. 规划返回 null
+        // 6. 规划返回 null
         return { action: 'no_match' };
     } catch (error) {
         logError_ACU('[剧情推进] Error processing last chat message:', error);

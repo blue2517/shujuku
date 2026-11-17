@@ -95,14 +95,6 @@ describe('runOptimizationLogic_ACU', () => {
     expect(mockRunPlotTasks).not.toHaveBeenCalled();
   });
 
-  it('重试中时跳过', async () => {
-    mockLoopState.isRetrying = true;
-    const result = await runOptimizationLogic_ACU('继续');
-    expect(result.success).toBe(false);
-    expect(result.skipped).toBe(true);
-    expect(result.reason).toBe('retrying');
-  });
-
   it('无任务时返回 no_tasks', async () => {
     mockRunPlotTasks.mockResolvedValue({
       finalMessage: null,

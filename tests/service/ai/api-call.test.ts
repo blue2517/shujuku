@@ -90,13 +90,39 @@ describe('getApiConfigByPreset_ACU', () => {
 
 // ═══ callApi_ACU ═══
 describe('callApi_ACU', () => {
-  it('tavern 模式使用 generateRaw', async () => {
+  it('custom 模式且 useMainApi=true 时使用 generateRaw', async () => {
     mockSettings.plotApiPreset = '';
     mockSettings.apiConfig = { useMainApi: true };
     mockGenerateRaw.mockResolvedValue('AI 回复');
     const result = await callApi_ACU([{ role: 'user', content: '你好' }], {});
     expect(result).toBe('AI 回复');
     expect(mockGenerateRaw).toHaveBeenCalled();
+  });
+
+  it('tavern 模式通过 sendConnectionManagerRequest 发送并透传预设与模型覆盖', async () => {
+    mockSettings.plotApiPreset = 'gemini 4 flash';
+    mockSettings.apiPresets = [
+      {
+        name: 'gemini 4 flash',
+        apiMode: 'tavern',
+        tavernProfile: 'cedc1477',
+        apiConfig: { model: 'gemini-4-hydrogen-low', max_tokens: 60000, temperature: 1, useMainApi: false },
+      },
+    ];
+    mockSendConnectionManager.mockResolvedValue({
+      result: { choices: [{ message: { content: '  剧情回复  ' } }] },
+    });
+
+    const result = await callApi_ACU([{ role: 'user', content: '你好' }], {});
+    expect(result).toBe('剧情回复');
+    expect(mockGenerateRaw).not.toHaveBeenCalled();
+    expect(mockSendConnectionManager).toHaveBeenCalledWith(
+      'cedc1477',
+      [{ role: 'user', content: '你好' }],
+      60000,
+      { stream: false, extractData: true },
+      expect.objectContaining({ model: 'gemini-4-hydrogen-low', temperature: 1 }),
+    );
   });
 
   it('generateRaw 不可用时抛错', async () => {
@@ -647,5 +673,79 @@ describe('buildConnectionManagerOverrides_ACU', () => {
         temperature: 0.8,
       }),
     );
+  });
+});
+
+// ═══ callApiWithPlotPreset_ACU tavern 模式 ═══
+describe('callApiWithPlotPreset_ACU tavern 模式', () => {
+  it('指定 tavern 预设时走 sendConnectionManagerRequest 而非 generateRaw', async () => {
+    mockSettings.plotApiPreset = 'gemini 4 flash';
+    mockSettings.apiPresets = [
+      {
+        name: 'gemini 4 flash',
+        apiMode: 'tavern',
+        tavernProfile: 'prof-cpa',
+        apiConfig: {
+          model: 'gemini-4-hydrogen-low',
+          max_tokens: 60000,
+          temperature: 1,
+          useMainApi: true,
+        },
+      },
+    ];
+    mockSendConnectionManager.mockResolvedValue({
+      result: { choices: [{ message: { content: 'plot tavern ok' } }] },
+    });
+
+    const controller = new AbortController();
+    const res = await callApiWithPlotPreset_ACU([{ role: 'user', content: '推进剧情' }], 'gemini 4 flash', controller.signal);
+    expect(res).toBe('plot tavern ok');
+    expect(mockGenerateRaw).not.toHaveBeenCalled();
+    expect(mockSendConnectionManager).toHaveBeenCalledWith(
+      'prof-cpa',
+      [{ role: 'user', content: '推进剧情' }],
+      60000,
+      { stream: false, extractData: true, signal: controller.signal },
+      expect.objectContaining({
+        model: 'gemini-4-hydrogen-low',
+        temperature: 1,
+      }),
+    );
+  });
+
+  it('tavern 模式缺少连接预设 ID 时抛错', async () => {
+    mockSettings.tavernProfile = '';
+    mockSettings.apiPresets = [
+      {
+        name: '无连接预设',
+        apiMode: 'tavern',
+        tavernProfile: '',
+        apiConfig: { model: 'gemini-4-hydrogen-low' },
+      },
+    ];
+
+    await expect(
+      callApiWithPlotPreset_ACU([{ role: 'user', content: '推进剧情' }], '无连接预设'),
+    ).rejects.toThrow('未选择酒馆连接预设');
+  });
+
+  it('tavern 模式返回后若 signal 已 abort 则抛 AbortError', async () => {
+    mockSettings.apiPresets = [
+      {
+        name: 'gemini 4 flash',
+        apiMode: 'tavern',
+        tavernProfile: 'prof-cpa',
+        apiConfig: { model: 'gemini-4-hydrogen-low' },
+      },
+    ];
+    mockSendConnectionManager.mockResolvedValue({
+      result: { choices: [{ message: { content: 'plot tavern ok' } }] },
+    });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      callApiWithPlotPreset_ACU([{ role: 'user', content: '推进剧情' }], 'gemini 4 flash', controller.signal),
+    ).rejects.toThrow('请求已取消');
   });
 });

@@ -755,6 +755,41 @@ describe('getWorldbookContentForPlot_ACU', () => {
     expect(options.baseScanText).toContain('当前输入');
   });
 
+  it('非 Agent 模式下优先使用 plotSettings.worldbookScanDepth，且 0 仅扫描当前输入', async () => {
+    mockGetChatArray.mockReturnValue([
+      { mes: '上次用户输入' },
+      { mes: '上次AI回复' },
+    ]);
+
+    await getWorldbookContentForPlot_ACU(
+      {
+        contextTurnCount: 3,
+        worldbookScanDepth: 1,
+        plotWorldbookConfig: { source: 'manual', manualSelection: ['书A'] },
+      },
+      '当前输入',
+    );
+
+    const opt1 = mockBuildCombinedWorldbookContentByStrategy.mock.calls[0][0];
+    expect(opt1.baseScanText).not.toContain('上次用户输入');
+    expect(opt1.baseScanText).toContain('上次AI回复');
+    expect(opt1.baseScanText).toContain('当前输入');
+
+    await getWorldbookContentForPlot_ACU(
+      {
+        contextTurnCount: 3,
+        worldbookScanDepth: 0,
+        plotWorldbookConfig: { source: 'manual', manualSelection: ['书A'] },
+      },
+      '当前输入',
+    );
+
+    const opt0 = mockBuildCombinedWorldbookContentByStrategy.mock.calls[1][0];
+    expect(opt0.baseScanText).not.toContain('上次用户输入');
+    expect(opt0.baseScanText).not.toContain('上次AI回复');
+    expect(opt0.baseScanText).toContain('当前输入');
+  });
+
   it('角色模式会合并 primary 和 additional 世界书并去重', async () => {
     mockGetCurrentCharacterWorldbookBinding.mockResolvedValue({
       primary: '主书',

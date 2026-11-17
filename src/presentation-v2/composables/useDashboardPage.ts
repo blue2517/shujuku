@@ -961,12 +961,6 @@ export function useDashboardPage(): DashboardPageState {
         value: settings_ACU.plotSettings?.enabled === true,
       },
       {
-        key: "continuationPageEnabled",
-        label: dashboardCopy.toggles.continuation.label,
-        description: dashboardCopy.toggles.continuation.description,
-        value: settings_ACU.continuationPageEnabled !== false,
-      },
-      {
         key: "externalImportPageEnabled",
         label: dashboardCopy.toggles.externalImport.label,
         description: dashboardCopy.toggles.externalImport.description,
@@ -1100,10 +1094,7 @@ export function useDashboardPage(): DashboardPageState {
       setSummaryVectorIndexMode_ACU(!!value);
     } else if (key === "developerOptionsEnabled") {
       setDeveloperOptionsEnabled(!!value);
-    } else if (
-      key === "continuationPageEnabled" ||
-      key === "externalImportPageEnabled"
-    ) {
+    } else if (key === "externalImportPageEnabled") {
       settings_ACU[key] = !!value;
       saveSettings_ACU();
     } else if (key === "contentReplaceEnabled") {

@@ -1186,11 +1186,18 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
       const agentContextSettings = hasAgentScanLimit && Number.isFinite(Number(rawAgentScanLimit))
         ? normalizeAgentContextSettings_ACU(apiSettings?.agentWorldbookControl?.contextSettings)
         : null;
+      const hasPlotScanDepth =
+        apiSettings.worldbookScanDepth !== undefined &&
+        apiSettings.worldbookScanDepth !== null &&
+        apiSettings.worldbookScanDepth !== '' &&
+        Number.isFinite(Number(apiSettings.worldbookScanDepth));
       const historyLimit = agentContextSettings
         ? agentContextSettings.plotWorldbookScanMessageLimit
-        : (Number.isFinite(apiSettings.contextTurnCount) ? Math.max(1, Math.trunc(apiSettings.contextTurnCount)) : 3);
+        : hasPlotScanDepth
+          ? Math.max(0, Math.trunc(Number(apiSettings.worldbookScanDepth)))
+          : (Number.isFinite(apiSettings.contextTurnCount) ? Math.max(1, Math.trunc(apiSettings.contextTurnCount)) : 3);
       const chatArray = getChatArray_ACU();
-      const recentMessages = historyLimit > 0 ? chatArray.slice(-historyLimit) : chatArray;
+      const recentMessages = historyLimit > 0 ? chatArray.slice(-historyLimit) : [];
       const historyAndUserText = `${recentMessages.map((message: any) => message.mes || '').join('\n')}\n${userMessage || ''}`;
       const enabledMap = plotCfg?.enabledEntries;
       const hasAnySelection = enabledMap && typeof enabledMap === 'object' && Object.keys(enabledMap).length > 0;

@@ -4,7 +4,7 @@
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
 import { DEFAULT_PLOT_SETTINGS_ACU } from '../../../shared/defaults-json.js';
-import { abortController_ACU, loopState_ACU, planningGuard_ACU, settings_ACU, _set_abortController_ACU } from '../state-manager';
+import { abortController_ACU, planningGuard_ACU, settings_ACU, _set_abortController_ACU } from '../state-manager';
 import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
 import { runPlotTasksRuntime_ACU } from './plot-task-engine';
 import { capturePlotRuntimeScope_ACU, summarizePlotRuntimeError_ACU, summarizePlotRuntimeScope_ACU } from './plot-runtime-scope';
@@ -45,11 +45,6 @@ function isTaskAbortedError_ACU(error: unknown): boolean {
     const { originalUserInput, hasExistingUserMessage = false } = options;
     const inputForHash = originalUserInput || userMessage;
     const initialScope = capturePlotRuntimeScope_ACU();
-
-    if (loopState_ACU.isRetrying) {
-        logDebug_ACU('[剧情推进] 当前处于重试流程，跳过剧情规划逻辑。');
-        return { success: false, skipped: true, reason: 'retrying' };
-    }
 
     if ((runOptimizationLogic_ACU as any).__inFlight) {
       const inflightText = String((runOptimizationLogic_ACU as any).__inFlightText || '');

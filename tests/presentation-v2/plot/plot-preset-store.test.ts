@@ -424,4 +424,29 @@ describe('usePlotPresetStore', () => {
 
     expect(store.importPresetFromJson('not json')).toBeNull();
   });
+
+  it('setContextTurnCount 与 setWorldbookScanDepth 限幅写回 plotSettings 及当前活动预设并保存', async () => {
+    const settings = createSettings();
+    settings.plotSettings.contextTurnCount = 2;
+    settings.plotSettings.worldbookScanDepth = 1;
+    const { store, saveSettings } = await importStore(settings);
+    store.refreshFromSettings();
+
+    expect(store.contextTurnCount).toBe(2);
+    expect(store.worldbookScanDepth).toBe(1);
+
+    store.setContextTurnCount(5);
+    expect(store.contextTurnCount).toBe(5);
+    expect(settings.plotSettings.contextTurnCount).toBe(5);
+    expect(settings.plotSettings.promptPresets[0].contextTurnCount).toBe(5);
+
+    store.setWorldbookScanDepth(0);
+    expect(store.worldbookScanDepth).toBe(0);
+    expect(settings.plotSettings.worldbookScanDepth).toBe(0);
+    expect(settings.plotSettings.promptPresets[0].worldbookScanDepth).toBe(0);
+
+    store.setWorldbookScanDepth(99);
+    expect(store.worldbookScanDepth).toBe(20);
+    expect(saveSettings).toHaveBeenCalledTimes(3);
+  });
 });
