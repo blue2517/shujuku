@@ -68401,13 +68401,18 @@ $CONTENT
         }
         return contents;
     }
+    // 透传给外部 fetch 拦截器（如防截断脚本的 {{no_tool}}）或宿主的占位符，不得被剧情标签替换器吞掉或改写为 XML 空标签。
+    const RESERVED_PLOT_PASSTHROUGH_PLACEHOLDERS_ACU = new Set(['no_tool']);
+    function isReservedPlotPassthroughPlaceholder_ACU(tagName) {
+        return RESERVED_PLOT_PASSTHROUGH_PLACEHOLDERS_ACU.has(String(tagName || '').trim().toLowerCase());
+    }
     function getPlotPlaceholderTagNames_ACU(text) {
         const placeholderPattern = /\{\{(\w+)\}\}/g;
         const names = [];
         let match;
         while ((match = placeholderPattern.exec(String(text || ''))) !== null) {
             const tagName = String(match[1] || '').trim();
-            if (tagName)
+            if (tagName && !isReservedPlotPassthroughPlaceholder_ACU(tagName))
                 names.push(tagName);
         }
         return [...new Set(names)];
@@ -68490,6 +68495,8 @@ $CONTENT
             return '';
         const placeholderPattern = /\{\{(\w+)\}\}/g;
         return sourceText.replace(placeholderPattern, (placeholder, tagName) => {
+            if (isReservedPlotPassthroughPlaceholder_ACU(tagName))
+                return placeholder;
             const resolvedValue = resolvePlotTagValueWithFallback_ACU(tagSourceMap, fallbackTagSourceMap, tagName);
             return buildPlotTagBlock_ACU(tagName, resolvedValue.value);
         });
@@ -68609,13 +68616,17 @@ $CONTENT
         const placeholderNames = [];
         let match;
         while ((match = placeholderPattern.exec(baseDirective)) !== null) {
-            placeholderNames.push(match[1]);
+            if (!isReservedPlotPassthroughPlaceholder_ACU(match[1])) {
+                placeholderNames.push(match[1]);
+            }
         }
         if (aggregatedTags instanceof Map && aggregatedTags.size > 0) {
             if (placeholderNames.length > 0) {
                 const matchedTags = new Set();
                 const injectOnlyTagNamesLower = new Set(Array.from(injectOnlyTagNames).map((name) => String(name || '').toLowerCase()));
                 const finalDirectiveWithTags = baseDirective.replace(placeholderPattern, (placeholder, tagName) => {
+                    if (isReservedPlotPassthroughPlaceholder_ACU(tagName))
+                        return placeholder;
                     const resolvedValue = getPlotTagMapValue_ACU(aggregatedTags, tagName);
                     matchedTags.add(String(tagName || '').toLowerCase());
                     if (resolvedValue.found) {
@@ -68655,7 +68666,7 @@ $CONTENT
             return [baseDirective, aggregatedTagBlocks].filter(Boolean).join('\n');
         }
         if (placeholderNames.length > 0) {
-            const finalDirectiveWithoutTags = baseDirective.replace(placeholderPattern, '');
+            const finalDirectiveWithoutTags = baseDirective.replace(placeholderPattern, (placeholder, tagName) => (isReservedPlotPassthroughPlaceholder_ACU(tagName) ? placeholder : ''));
             return [finalDirectiveWithoutTags.trim(), rawFallbackText].filter(Boolean).join('\n');
         }
         return [baseDirective, rawFallbackText].filter(Boolean).join('\n');

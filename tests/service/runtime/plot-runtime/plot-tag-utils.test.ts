@@ -99,6 +99,9 @@ describe('getPlotPlaceholderTagNames_ACU', () => {
   it('无占位符返回空数组', () => {
     expect(getPlotPlaceholderTagNames_ACU('普通文本')).toEqual([]);
   });
+  it('跳过 {{no_tool}} 等透传保留占位符', () => {
+    expect(getPlotPlaceholderTagNames_ACU('{{plot}}\n{{no_tool}}')).toEqual(['plot']);
+  });
 });
 
 describe('buildPlotTagBlock_ACU', () => {
@@ -153,6 +156,11 @@ describe('replacePlotTagPlaceholders_ACU', () => {
     const history = new Map([['recall', ['上一轮内容']]]);
     const result = replacePlotTagPlaceholders_ACU('内容={{recall}}', current, history);
     expect(result).toContain('<recall>上一轮内容</recall>');
+  });
+  it('保留 {{no_tool}} 原样透传给外部拦截器，不转换为空标签', () => {
+    const map = new Map([['plot', ['剧情内容']]]);
+    const result = replacePlotTagPlaceholders_ACU('{{plot}}\n\n{{no_tool}}', map);
+    expect(result).toBe('<plot>剧情内容</plot>\n\n{{no_tool}}');
   });
   it('无匹配占位符返回标签块（空内容）', () => {
     const map = new Map();
@@ -381,5 +389,10 @@ describe('buildFinalPlotInjectionMessage_ACU', () => {
   it('空指令使用默认指令', () => {
     const result = buildFinalPlotInjectionMessage_ACU('', [], new Map());
     expect(result).toContain('SYSTEM_DIRECTIVE');
+  });
+  it('最终指令中包含 {{no_tool}} 时无论是否命中标签都原样保留', () => {
+    const tags = new Map<string, any>([['plot', ['剧情内容']]]);
+    expect(buildFinalPlotInjectionMessage_ACU('{{plot}}\n{{no_tool}}', [], tags)).toBe('<plot>剧情内容</plot>\n{{no_tool}}');
+    expect(buildFinalPlotInjectionMessage_ACU('{{plot}}\n{{no_tool}}', [], new Map())).toBe('{{no_tool}}');
   });
 });
