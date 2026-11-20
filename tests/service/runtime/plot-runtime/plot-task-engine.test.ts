@@ -2720,4 +2720,192 @@ describe('runPlotTasksRuntime_ACU', () => {
       },
     );
   });
+
+  it('交火模式关闭时，本地直出仍然固定排除最新 N 条且不调用 AI', async () => {
+    mockGlobalMeta.summaryVectorIndexModeGlobal = false;
+    delete (mockSettings as any).summaryVectorIndexModeDefault;
+    mockGetCurrentVectorMemoryConfig.mockReturnValue({
+      summaryIndexPlotInjectColumns: [],
+      recentFixedExcludeCount: 2,
+      summaryIndexKeywordMinRows: 40,
+    });
+    mockGetLatestSummaryVectorRecallSnapshot.mockReturnValue(null);
+    mockExtractAllAmCodesFromSummaryTable.mockReturnValue({
+      totalCount: 5,
+      codes: ['AM0001', 'AM0002', 'AM0003', 'AM0004', 'AM0005'],
+      foundTable: true,
+    });
+    mockBuildDirectRecallTaskResponse.mockImplementation((codes: string[]) => `<recall>\n${codes.join(', ')}\n</recall>`);
+    mockExtractPlotTagsFromResponse.mockImplementation((raw: string) => ({
+      tagNames: ['recall'],
+      extractedTags: { recall: raw.replace(/<\/?recall>/g, '').trim() },
+      injectedFragments: [raw],
+      injectOnlyTags: {},
+      injectOnlyFragments: [],
+      injectOnlyTagNames: [],
+    }));
+
+    const plotSettings = {
+      directRecallWhenBelowThreshold: true,
+      recallCount: 20,
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '请召回记忆' }],
+        },
+      ],
+    };
+
+    const result = await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockCallApiWithPlotPreset).not.toHaveBeenCalled();
+    expect(mockBuildDirectRecallTaskResponse).toHaveBeenCalledWith(
+      ['AM0001', 'AM0002', 'AM0003'],
+      expect.any(Object),
+      { totalCount: 5, excludedCount: 2 },
+    );
+    expect(result.successfulResults[0].extractedTags.recall).toBe('AM0001, AM0002, AM0003');
+  });
+
+  it('交火模式关闭时，发给推进 AI 的 $5 纪要依然固定排除最新 N 条（自定义列、世界书、本地纪要表与大纲回退）', async () => {
+    mockGlobalMeta.summaryVectorIndexModeGlobal = false;
+    delete (mockSettings as any).summaryVectorIndexModeDefault;
+    mockGetCurrentVectorMemoryConfig.mockReturnValue({
+      summaryIndexPlotInjectColumns: ['概览'],
+      recentFixedExcludeCount: 3,
+      summaryIndexKeywordMinRows: 40,
+    });
+    // 即使缓存中存在陈旧的 recallSnapshot，交火关闭后也应忽略并照常执行固定排除
+    mockGetLatestSummaryVectorRecallSnapshot.mockReturnValue({
+      chatKey: 'test-chat',
+      isolationKey: '',
+      indexCodes: ['AM0001'],
+      rowKeys: ['r1'],
+      updatedAt: Date.now(),
+    });
+    mockExtractAllAmCodesFromSummaryTable.mockReturnValue({
+      totalCount: 25,
+      codes: Array.from({ length: 25 }, (_, i) => `AM${String(i + 1).padStart(4, '0')}`),
+      foundTable: true,
+    });
+    mockFormatSummaryRowsForPlotByColumns.mockReturnValue({
+      success: true,
+      content: '自定义投影列已排除最近3条',
+      rowCount: 22,
+    });
+
+    const plotSettings = {
+      directRecallWhenBelowThreshold: true,
+      recallCount: 20,
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '$5' }],
+        },
+      ],
+    };
+
+    await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockFormatSummaryRowsForPlotByColumns).toHaveBeenCalledWith(
+      expect.any(Object),
+      {
+        columns: ['概览'],
+        filterIndexCodes: null,
+        excludeRecentCount: 3,
+      },
+    );
+
+    // 验证世界书纪要索引路径
+    mockFormatSummaryRowsForPlotByColumns.mockReturnValue({ success: false, content: '', rowCount: 0 });
+    mockGetCurrentVectorMemoryConfig.mockReturnValue({
+      summaryIndexPlotInjectColumns: [],
+      recentFixedExcludeCount: 3,
+      summaryIndexKeywordMinRows: 40,
+    });
+    mockGetSummaryIndexContentForPlot.mockResolvedValue('# 纪要索引\n| 概要 | 编码索引 |\n|---|---|\n| 1 | AM0001 |\n| 25 | AM0025 |');
+
+    await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockExcludeRecentRowsFromSummaryIndexContent).toHaveBeenCalledWith(
+      '# 纪要索引\n| 概要 | 编码索引 |\n|---|---|\n| 1 | AM0001 |\n| 25 | AM0025 |',
+      {
+        excludeRecentCount: 3,
+        excludeIndexCodes: ['AM0023', 'AM0024', 'AM0025'],
+      },
+    );
+
+    // 验证本地纪要表回退路径
+    mockGetSummaryIndexContentForPlot.mockResolvedValue(null);
+    mockFormatSummaryIndexForPlot.mockReturnValue({ success: true, content: '本地纪要已排除3条' });
+
+    await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockFormatSummaryIndexForPlot).toHaveBeenCalledWith(
+      expect.any(Object),
+      { excludeRecentCount: 3 },
+    );
+
+    // 验证总体大纲表回退路径
+    mockFormatSummaryIndexForPlot.mockReturnValue({ success: false, content: '无纪要表' });
+    mockFormatOutlineTableForPlot.mockReturnValue('总体大纲已排除3条');
+
+    await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockFormatOutlineTableForPlot).toHaveBeenCalledWith(
+      expect.any(Object),
+      { excludeRecentCount: 3 },
+    );
+  });
+
+  it('交火模式开启且存在 recallSnapshot 但世界书条目缺失回退到本地全表时，依然排除最新 N 条', async () => {
+    mockGlobalMeta.summaryVectorIndexModeGlobal = true;
+    mockGetCurrentVectorMemoryConfig.mockReturnValue({
+      summaryIndexPlotInjectColumns: [],
+      recentFixedExcludeCount: 4,
+      summaryIndexKeywordMinRows: 10,
+    });
+    mockGetLatestSummaryVectorRecallSnapshot.mockReturnValue({
+      chatKey: 'test-chat',
+      isolationKey: '',
+      indexCodes: ['AM0002'],
+      rowKeys: ['r2'],
+      updatedAt: Date.now(),
+    });
+    mockGetSummaryIndexContentForPlot.mockResolvedValue(null);
+    mockFormatSummaryIndexForPlot.mockReturnValue({ success: true, content: '本地纪要回退已排除4条' });
+
+    const plotSettings = {
+      directRecallWhenBelowThreshold: false,
+      recallCount: 20,
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '$5' }],
+        },
+      ],
+    };
+
+    await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockFormatSummaryIndexForPlot).toHaveBeenCalledWith(
+      expect.any(Object),
+      { excludeRecentCount: 4 },
+    );
+  });
 });

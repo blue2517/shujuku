@@ -69529,13 +69529,14 @@ $CONTENT
                 ? vectorConfig.summaryIndexPlotInjectColumns.filter(Boolean)
                 : [];
             const isolationKey = settings_ACU?.dataIsolationEnabled ? String(settings_ACU?.dataIsolationCode || '') : '';
-            const recallSnapshot = getLatestSummaryVectorRecallSnapshot_ACU(currentChatFileIdentifier_ACU || undefined, isolationKey);
             const isCrossfireModeEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true
                 || settings_ACU?.summaryVectorIndexModeDefault === true;
+            const rawRecallSnapshot = getLatestSummaryVectorRecallSnapshot_ACU(currentChatFileIdentifier_ACU || undefined, isolationKey);
+            const recallSnapshot = isCrossfireModeEnabled ? rawRecallSnapshot : null;
             const rawRecentExcludeCount = Math.max(0, Math.floor(Number(vectorConfig?.recentFixedExcludeCount) || 0));
-            effectiveRecentExcludeCount = isCrossfireModeEnabled ? rawRecentExcludeCount : 0;
-            // 交火模式已启用但未触发向量召回（无 recallSnapshot，常见于纪要条数未达向量触发阈值）时，
-            // 传给推进 AI 的 $5 纪要同样排除最新 N 条，避免与近期正文重复或误导。
+            // 固定排除永远生效，与交火模式是否开启无关；仅当交火模式开启且已触发向量召回（存在 recallSnapshot）时，
+            // 初筛结果已排除最新 N 条，避免对召回结果二次排除。
+            effectiveRecentExcludeCount = rawRecentExcludeCount;
             const plotExcludeRecentCount = (!recallSnapshot && effectiveRecentExcludeCount > 0)
                 ? effectiveRecentExcludeCount
                 : 0;
@@ -69574,18 +69575,19 @@ $CONTENT
                         + (plotExcludeRecentCount > 0 ? `（未触发向量召回，已固定排除最新 ${plotExcludeRecentCount} 条）` : ''));
                 }
                 else if (currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object') {
-                    const summaryIndexResult = plotExcludeRecentCount > 0
-                        ? formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: plotExcludeRecentCount })
+                    const rawTableExcludeCount = effectiveRecentExcludeCount;
+                    const summaryIndexResult = rawTableExcludeCount > 0
+                        ? formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: rawTableExcludeCount })
                         : formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU);
                     if (summaryIndexResult.success) {
                         outlineTableContent = summaryIndexResult.content;
                         logDebug_ACU('[剧情推进] $5 未找到世界书纪要索引条目，使用纪要表的概要和编码索引列'
-                            + (plotExcludeRecentCount > 0 ? `（已固定排除最新 ${plotExcludeRecentCount} 条）` : ''));
+                            + (rawTableExcludeCount > 0 ? `（已固定排除最新 ${rawTableExcludeCount} 条）` : ''));
                     }
                     else {
                         logDebug_ACU('[剧情推进] $5 纪要表读取失败，回退使用总体大纲表。原因:', summaryIndexResult.content);
-                        outlineTableContent = plotExcludeRecentCount > 0
-                            ? formatOutlineTableForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: plotExcludeRecentCount })
+                        outlineTableContent = rawTableExcludeCount > 0
+                            ? formatOutlineTableForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: rawTableExcludeCount })
                             : formatOutlineTableForPlot_ACU(currentJsonTableData_ACU);
                         logDebug_ACU('[剧情推进] $5 回退使用总体大纲表内容');
                     }
@@ -85123,7 +85125,7 @@ $CONTENT
         const snapshot = JSON.parse(JSON.stringify(config));
         Object.assign(config, patch);
         const saveResult = saveSettings_ACU();
-        if (!saveResult.saved) {
+        if (saveResult && !saveResult.saved) {
             Object.assign(config, snapshot);
             settings_ACU.vectorMemoryConfig = config;
             return {
@@ -131547,6 +131549,63 @@ Expected function or array of functions, received type ${typeof value}.`
         };
     }
 
+    /**
+     * useRecentFixedExcludeConfig — 剧情推进/向量召回共用的「固定排除最新 N 条」配置读写。
+     *
+     * 权威字段保存在 globalMeta_ACU.vectorMemoryConfigGlobal.recentFixedExcludeCount，
+     * 无论交火模式是否开启都对剧情推进（$5 与本地直出）生效，交火启用时也同步用于召回前排除。
+     */
+    function getDefaultRecentFixedExcludeCount() {
+        const value = Number(defaultVectorMemoryConfig_ACU.recentFixedExcludeCount);
+        return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 5;
+    }
+    function useRecentFixedExcludeConfig() {
+        const toast = useToastStore();
+        const recentFixedExcludeCount = ref(getDefaultRecentFixedExcludeCount());
+        function refresh() {
+            const config = getCurrentVectorMemoryConfig_ACU();
+            const raw = Number(config?.recentFixedExcludeCount);
+            recentFixedExcludeCount.value = Number.isFinite(raw) && raw >= 0
+                ? Math.floor(raw)
+                : getDefaultRecentFixedExcludeCount();
+        }
+        function preview(raw) {
+            const value = Number(raw);
+            recentFixedExcludeCount.value = Number.isFinite(value) ? Math.floor(value) : 0;
+        }
+        function commit(raw) {
+            const trimmed = typeof raw === 'string' ? raw.trim() : raw;
+            const parsed = trimmed === '' ? Number.NaN : Number(trimmed);
+            if (!Number.isFinite(parsed) || parsed < 0) {
+                const fallback = getDefaultRecentFixedExcludeCount();
+                recentFixedExcludeCount.value = Number.isFinite(parsed) ? Math.floor(parsed) : 0;
+                toast.warning(`固定排除必须是非负整数，已重置为默认值 ${fallback}。`);
+                recentFixedExcludeCount.value = fallback;
+                const result = updateGlobalVectorMemoryConfigFields_ACU({
+                    recentFixedExcludeCount: fallback,
+                });
+                if (!result.ok) {
+                    toast.error(result.message || '保存失败。');
+                }
+                return;
+            }
+            const num = Math.floor(parsed);
+            recentFixedExcludeCount.value = num;
+            const result = updateGlobalVectorMemoryConfigFields_ACU({
+                recentFixedExcludeCount: num,
+            });
+            if (!result.ok) {
+                toast.error(result.message || '保存失败。');
+            }
+        }
+        return {
+            recentFixedExcludeCount,
+            refresh,
+            preview,
+            commit,
+        };
+    }
+
     const plotCopy = {
         panels: {
             preset: {
@@ -132150,8 +132209,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-match-fields[data-v-c9c9fd9f] {\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend[data-v-c9c9fd9f] {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid[data-v-c9c9fd9f] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-plot-match-fields__toggle-row[data-v-c9c9fd9f] {\r\n  margin-top: 4px;\n}\r\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0-c9c9fd9f");
-    var PlotMatchReplaceFields_vue_vue_type_style_index_0_scoped_c9c9fd9f_lang = null;
+    injectSfcStyle("\n.acu-v2-plot-match-fields[data-v-166b0633] {\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend[data-v-166b0633] {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid[data-v-166b0633] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-plot-match-fields__toggle-row[data-v-166b0633] {\r\n  margin-top: 4px;\n}\r\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0-166b0633");
+    var PlotMatchReplaceFields_vue_vue_type_style_index_0_scoped_166b0633_lang = null;
 
     const _hoisted_1$K = { class: "acu-v2-plot-match-fields" };
     const _hoisted_2$D = { class: "acu-v2-plot-match-fields__grid" };
@@ -132226,7 +132285,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		]),
 		createBaseVNode("div", _hoisted_3$x, [createVNode($setup["AcuFormRow"], {
 			label: "纪要不足时本地直出",
-			hint: "开启后，当大纲/纪要条数 ≤ zhaohui 时跳过 AI 推进请求，直接提取索引编码注入最终提示词（交火模式下会自动排除最近固定排除的 N 条），降低延迟并节省 Token。"
+			hint: "开启后，当大纲/纪要条数 ≤ zhaohui 时跳过 AI 推进请求，直接提取索引编码注入最终提示词（会自动排除「固定排除」设置的最新 N 条），降低延迟并节省 Token。"
 		}, {
 			default: withCtx(() => [createVNode($setup["AcuToggle"], {
 				"model-value": !!$props.directRecallWhenBelowThreshold,
@@ -132236,7 +132295,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		})])
 	]);
     }
-    var PlotMatchReplaceFields = /*#__PURE__*/ _export_sfc(_sfc_main$L, [["render", _sfc_render$L], ["__scopeId", "data-v-c9c9fd9f"]]);
+    var PlotMatchReplaceFields = /*#__PURE__*/ _export_sfc(_sfc_main$L, [["render", _sfc_render$L], ["__scopeId", "data-v-166b0633"]]);
 
     const DEFAULT_ROLE_OPTIONS = [
         { value: 'SYSTEM', label: 'SYSTEM' },
@@ -133249,11 +133308,13 @@ Expected function or array of functions, received type ${typeof value}.`
         },
         setup(__props, { expose: __expose }) {
             __expose();
+            const props = __props;
             const store = usePlotPresetStore();
             const dialogStore = useDialogStore();
             const toast = useToastStore();
             const { apiStore, followActiveApiLabel, apiPresetSelectOptions: pageApiSelectOptions, } = useApiPresetSelectOptions();
             const management = usePlotPresetManagement();
+            const recentExclude = useRecentFixedExcludeConfig();
             const devOptions = useDevOptions();
             const presetDropdownItems = computed(() => [
                 {
@@ -133328,17 +133389,20 @@ Expected function or array of functions, received type ${typeof value}.`
             function refreshAll() {
                 store.refreshFromSettings();
                 apiStore.refreshFromSettings();
+                if (props.showContextSettings) {
+                    recentExclude.refresh();
+                }
             }
             onMounted(refreshAll);
             watch(useChatChangedTick(), refreshAll);
-            const __returned__ = { store, dialogStore, toast, apiStore, followActiveApiLabel, pageApiSelectOptions, management, devOptions, presetDropdownItems, apiPresetOptions, currentTaskApiOverride, onTaskApiOverride, onDelete, onExport, onImportFile, refreshAll, get plotCopy() { return plotCopy; }, AcuBadge, AcuFileButton, AcuFormRow, AcuIconButton, AcuInput, AcuPanel, AcuPresetDropdown, AcuSelect, AcuText, PlotPresetDrawer };
+            const __returned__ = { props, store, dialogStore, toast, apiStore, followActiveApiLabel, pageApiSelectOptions, management, recentExclude, devOptions, presetDropdownItems, apiPresetOptions, currentTaskApiOverride, onTaskApiOverride, onDelete, onExport, onImportFile, refreshAll, get plotCopy() { return plotCopy; }, AcuBadge, AcuFileButton, AcuFormRow, AcuIconButton, AcuInput, AcuPanel, AcuPresetDropdown, AcuSelect, AcuText, PlotPresetDrawer };
             Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
             return __returned__;
         }
     });
 
-    injectSfcStyle("\n.acu-plot-preset-panel__status-line[data-v-56932603] {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-plot-preset-panel__select-row[data-v-56932603] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  margin-bottom: 12px;\r\n  min-width: 0;\n}\n.acu-plot-preset-panel__context-grid[data-v-56932603] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  margin-top: 12px;\n}\n@media (max-width: 640px) {\n.acu-plot-preset-panel__context-grid[data-v-56932603] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/PlotPresetPanel.vue#style-0-56932603");
-    var PlotPresetPanel_vue_vue_type_style_index_0_scoped_56932603_lang = null;
+    injectSfcStyle("\n.acu-plot-preset-panel__status-line[data-v-3e39851c] {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-body, 1.45);\n}\n.acu-plot-preset-panel__select-row[data-v-3e39851c] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  margin-bottom: 12px;\r\n  min-width: 0;\n}\n.acu-plot-preset-panel__context-grid[data-v-3e39851c] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  margin-top: 12px;\n}\n.acu-plot-preset-panel__context-full[data-v-3e39851c] {\r\n  grid-column: 1 / -1;\n}\n@media (max-width: 640px) {\n.acu-plot-preset-panel__context-grid[data-v-3e39851c] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/PlotPresetPanel.vue#style-0-3e39851c");
+    var PlotPresetPanel_vue_vue_type_style_index_0_scoped_3e39851c_lang = null;
 
     const _hoisted_1$F = { class: "acu-text__value" };
     const _hoisted_2$y = { class: "acu-text__value" };
@@ -133356,7 +133420,7 @@ Expected function or array of functions, received type ${typeof value}.`
 			key: 0,
 			variant: "neutral"
 		}, {
-			default: withCtx(() => [..._cache[8] || (_cache[8] = [createTextVNode(
+			default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
 				"使用默认预设",
 				-1
 				/* CACHED */
@@ -133369,7 +133433,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				class: "acu-plot-preset-panel__status-line acu-v2-plot-page__status-line"
 			}, {
 				default: withCtx(() => [
-					_cache[12] || (_cache[12] = createTextVNode(
+					_cache[14] || (_cache[14] = createTextVNode(
 						" 当前聊天: ",
 						-1
 						/* CACHED */
@@ -133384,7 +133448,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					$setup.store.defaultPresetName ? (openBlock(), createElementBlock(
 						Fragment,
 						{ key: 0 },
-						[_cache[9] || (_cache[9] = createTextVNode(
+						[_cache[11] || (_cache[11] = createTextVNode(
 							" · 全局默认: ",
 							-1
 							/* CACHED */
@@ -133400,11 +133464,11 @@ Expected function or array of functions, received type ${typeof value}.`
 					)) : (openBlock(), createElementBlock(
 						Fragment,
 						{ key: 1 },
-						[_cache[10] || (_cache[10] = createTextVNode(
+						[_cache[12] || (_cache[12] = createTextVNode(
 							" · 全局默认: ",
 							-1
 							/* CACHED */
-						)), _cache[11] || (_cache[11] = createBaseVNode(
+						)), _cache[13] || (_cache[13] = createBaseVNode(
 							"strong",
 							{ class: "acu-text__value" },
 							"默认预设",
@@ -133449,7 +133513,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					accept: "application/json,.json",
 					onFile: $setup.onImportFile
 				}, {
-					default: withCtx(() => [..._cache[13] || (_cache[13] = [createBaseVNode(
+					default: withCtx(() => [..._cache[15] || (_cache[15] = [createBaseVNode(
 						"i",
 						{ class: "fa-solid fa-download" },
 						null,
@@ -133481,35 +133545,54 @@ Expected function or array of functions, received type ${typeof value}.`
 				])]),
 				_: 1
 			})) : createCommentVNode("v-if", true),
-			$props.showContextSettings ? (openBlock(), createElementBlock("div", _hoisted_4$p, [createVNode($setup["AcuFormRow"], {
-				label: "AI 上下文",
-				hint: "仅统计 AI 最新 N 个楼层回复，不统计用户输入。"
-			}, {
-				default: withCtx(() => [createVNode($setup["AcuInput"], {
-					"model-value": $setup.store.contextTurnCount,
-					type: "number",
-					min: 0,
-					max: 20,
-					step: 1,
-					"data-acu-plot-field": "contextTurnCount",
-					onChange: _cache[3] || (_cache[3] = ($event) => $setup.store.setContextTurnCount($event))
-				}, null, 8, ["model-value"])]),
-				_: 1
-			}), createVNode($setup["AcuFormRow"], {
-				label: "世界书扫描深度",
-				hint: "扫描世界书关键词时回看的历史消息数（本轮输入另行附加；设 1 = 上次 AI 回复 + 本轮输入，设 0 = 仅本轮输入）。"
-			}, {
-				default: withCtx(() => [createVNode($setup["AcuInput"], {
-					"model-value": $setup.store.worldbookScanDepth,
-					type: "number",
-					min: 0,
-					max: 20,
-					step: 1,
-					"data-acu-plot-field": "worldbookScanDepth",
-					onChange: _cache[4] || (_cache[4] = ($event) => $setup.store.setWorldbookScanDepth($event))
-				}, null, 8, ["model-value"])]),
-				_: 1
-			})])) : createCommentVNode("v-if", true),
+			$props.showContextSettings ? (openBlock(), createElementBlock("div", _hoisted_4$p, [
+				createVNode($setup["AcuFormRow"], {
+					label: "AI 上下文",
+					hint: "仅统计 AI 最新 N 个楼层回复，不统计用户输入。"
+				}, {
+					default: withCtx(() => [createVNode($setup["AcuInput"], {
+						"model-value": $setup.store.contextTurnCount,
+						type: "number",
+						min: 0,
+						max: 20,
+						step: 1,
+						"data-acu-plot-field": "contextTurnCount",
+						onChange: _cache[3] || (_cache[3] = ($event) => $setup.store.setContextTurnCount($event))
+					}, null, 8, ["model-value"])]),
+					_: 1
+				}),
+				createVNode($setup["AcuFormRow"], {
+					label: "世界书扫描深度",
+					hint: "扫描世界书关键词时回看的历史消息数（本轮输入另行附加；设 1 = 上次 AI 回复 + 本轮输入，设 0 = 仅本轮输入）。"
+				}, {
+					default: withCtx(() => [createVNode($setup["AcuInput"], {
+						"model-value": $setup.store.worldbookScanDepth,
+						type: "number",
+						min: 0,
+						max: 20,
+						step: 1,
+						"data-acu-plot-field": "worldbookScanDepth",
+						onChange: _cache[4] || (_cache[4] = ($event) => $setup.store.setWorldbookScanDepth($event))
+					}, null, 8, ["model-value"])]),
+					_: 1
+				}),
+				createVNode($setup["AcuFormRow"], {
+					class: "acu-plot-preset-panel__context-full",
+					label: "固定排除（排除最新 N 条）",
+					hint: "最新的 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；无论是否开启交火模式或触发向量召回，发给推进 AI 的纪要与本地直出均会排除最新 N 条；填 0 表示不排除。"
+				}, {
+					default: withCtx(() => [createVNode($setup["AcuInput"], {
+						"model-value": $setup.recentExclude.recentFixedExcludeCount.value,
+						type: "number",
+						min: 0,
+						step: 1,
+						"data-acu-plot-field": "recentFixedExcludeCount",
+						"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.recentExclude.preview($event)),
+						onChange: _cache[6] || (_cache[6] = ($event) => $setup.recentExclude.commit($event))
+					}, null, 8, ["model-value"])]),
+					_: 1
+				})
+			])) : createCommentVNode("v-if", true),
 			createVNode($setup["PlotPresetDrawer"], {
 				"is-open": $setup.management.isDrawerOpen.value,
 				view: $setup.management.drawerView.value,
@@ -133529,12 +133612,12 @@ Expected function or array of functions, received type ${typeof value}.`
 				onClose: $setup.management.closeDrawer,
 				onBack: $setup.management.backToManage,
 				onOpenCreate: $setup.management.openCreate,
-				onOpenEdit: _cache[5] || (_cache[5] = ($event) => $setup.management.openEdit($event)),
-				onSetDefault: _cache[6] || (_cache[6] = ($event) => $setup.store.setDefaultPreset($event)),
+				onOpenEdit: _cache[7] || (_cache[7] = ($event) => $setup.management.openEdit($event)),
+				onSetDefault: _cache[8] || (_cache[8] = ($event) => $setup.store.setDefaultPreset($event)),
 				onDelete: $setup.onDelete,
 				onExport: $setup.onExport,
 				onSave: $setup.management.saveDraft,
-				onUpdateName: _cache[7] || (_cache[7] = ($event) => $setup.management.draftMeta.name = $event),
+				onUpdateName: _cache[9] || (_cache[9] = ($event) => $setup.management.draftMeta.name = $event),
 				onUpdateContextExtractRules: $setup.management.setContextExtractRules,
 				onUpdateContextExcludeRules: $setup.management.setContextExcludeRules,
 				onUpdateTaskApiOverride: $setup.onTaskApiOverride,
@@ -133569,7 +133652,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		_: 1
 	}, 8, ["title", "description"]);
     }
-    var PlotPresetPanel = /*#__PURE__*/ _export_sfc(_sfc_main$F, [["render", _sfc_render$F], ["__scopeId", "data-v-56932603"]]);
+    var PlotPresetPanel = /*#__PURE__*/ _export_sfc(_sfc_main$F, [["render", _sfc_render$F], ["__scopeId", "data-v-3e39851c"]]);
 
     var _sfc_main$E = /*@__PURE__*/ defineComponent({
         __name: 'TablePresetDrawer',
@@ -143525,10 +143608,6 @@ Expected function or array of functions, received type ${typeof value}.`
     function getDefaultVectorMemoryConfigForV2() {
         return defaultVectorMemoryConfig_ACU;
     }
-    function getDefaultRecentFixedExcludeCount() {
-        const value = Number(getDefaultVectorMemoryConfigForV2().recentFixedExcludeCount);
-        return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 5;
-    }
     function getDefaultRollingDeltaFoldThreshold() {
         const value = Number(getDefaultVectorMemoryConfigForV2().summaryIndexRollingDeltaFoldThreshold);
         return Number.isFinite(value) && value > 0 ? Math.floor(value) : 15;
@@ -143574,7 +143653,6 @@ Expected function or array of functions, received type ${typeof value}.`
             topK: defaults.topK,
             minScore: defaults.minScore,
             recallCandidateLimit: defaults.recallCandidateLimit,
-            recentFixedExcludeCount: getDefaultRecentFixedExcludeCount(),
             summaryIndexVectorColumns: Array.isArray(defaults.summaryIndexVectorColumns) ? [...defaults.summaryIndexVectorColumns] : [],
             summaryIndexPlotInjectColumns: Array.isArray(defaults.summaryIndexPlotInjectColumns) ? [...defaults.summaryIndexPlotInjectColumns] : [],
             vectorNamespace: defaults.vectorNamespace || 'chat',
@@ -143669,9 +143747,6 @@ Expected function or array of functions, received type ${typeof value}.`
             form.topK = config.topK;
             form.minScore = config.minScore;
             form.recallCandidateLimit = config.recallCandidateLimit;
-            form.recentFixedExcludeCount = Number.isFinite(Number(config.recentFixedExcludeCount)) && Number(config.recentFixedExcludeCount) >= 0
-                ? Math.floor(Number(config.recentFixedExcludeCount))
-                : getDefaultRecentFixedExcludeCount();
             form.summaryIndexVectorColumns = Array.isArray(config.summaryIndexVectorColumns)
                 ? [...config.summaryIndexVectorColumns]
                 : [];
@@ -143790,35 +143865,6 @@ Expected function or array of functions, received type ${typeof value}.`
             runValidation();
             pushSavedMessage();
         }
-        function setNonNegativeNumberField(key, raw) {
-            const trimmed = typeof raw === 'string' ? raw.trim() : raw;
-            const parsed = trimmed === '' ? Number.NaN : Number(trimmed);
-            if (key === 'recentFixedExcludeCount' && (!Number.isFinite(parsed) || parsed < 0)) {
-                const fallback = getDefaultRecentFixedExcludeCount();
-                form.recentFixedExcludeCount = Number.isFinite(parsed) ? Math.floor(parsed) : 0;
-                toast.warning(`固定排除必须是非负整数，已重置为默认值 ${fallback}。`);
-                form.recentFixedExcludeCount = fallback;
-                const result = updateGlobalVectorMemoryConfigFields_ACU({
-                    recentFixedExcludeCount: fallback,
-                });
-                if (!result.ok) {
-                    toast.error(result.message || '保存失败。');
-                    return;
-                }
-                runValidation();
-                pushSavedMessage();
-                return;
-            }
-            const num = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
-            form[key] = num;
-            const result = updateGlobalVectorMemoryConfigFields_ACU({ [key]: num });
-            if (!result.ok) {
-                toast.error(result.message || '保存失败。');
-                return;
-            }
-            runValidation();
-            pushSavedMessage();
-        }
         function setBooleanField(key, value) {
             const next = value === true;
             form[key] = next;
@@ -143860,10 +143906,6 @@ Expected function or array of functions, received type ${typeof value}.`
             }
             runValidation();
             pushSavedMessage();
-        }
-        function previewRecentFixedExcludeCount(raw) {
-            const value = Number(raw);
-            form.recentFixedExcludeCount = Number.isFinite(value) ? Math.floor(value) : 0;
         }
         function setMinScore(raw) {
             let num = Number(raw);
@@ -144136,10 +144178,8 @@ Expected function or array of functions, received type ${typeof value}.`
             clearIndexCache,
             deleteCurrentIndex,
             migrateLegacyIndex,
-            previewRecentFixedExcludeCount,
             setApiField,
             setNumberField,
-            setNonNegativeNumberField,
             setBooleanField,
             toggleColumnSelection,
             setV2WriteScopeAllowlist,
@@ -144182,7 +144222,7 @@ Expected function or array of functions, received type ${typeof value}.`
             },
             recall: {
                 title: "召回参数",
-                description: "控制纪要启用召回的条件、每次召回条数及固定排除近期条数。配置错误（如候选上限 < TopK）会自动纠正；建议保持「触发阈值 > 固定排除」，避免所有纪要都被排除。",
+                description: "控制纪要启用召回的条件及每次召回条数。配置错误（如候选上限 < TopK）会自动纠正；固定排除条数请在「剧情推进」页设置，并建议保持「触发阈值 > 固定排除」，避免所有纪要都被排除。",
             },
             archive: {
                 title: "归档与分块",
@@ -144321,8 +144361,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-vector-index-page[data-v-3a8ac2f1] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-3a8ac2f1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-3a8ac2f1] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-3a8ac2f1] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-3a8ac2f1]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-3a8ac2f1] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-3a8ac2f1] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-3a8ac2f1] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__subconfig[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  padding-top: 8px;\n}\n.acu-v2-vector-index-page__section-title[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-vector-index-page__checkbox-group[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 16px;\n}\n.acu-v2-vector-api-form__inline-action[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-vector-api-form__muted[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-api-form__danger[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-danger, #ef4444);\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-3a8ac2f1] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-3a8ac2f1] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-3a8ac2f1] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-3a8ac2f1] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-diag__toolbar[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-vector-diag__toolbar[data-v-3a8ac2f1] > :first-child {\r\n  flex: 1 1 280px;\n}\n.acu-v2-vector-diag__body[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  margin-top: 10px;\n}\n.acu-v2-vector-diag__meta[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px 18px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-2, var(--acu-text-1));\n}\n.acu-v2-vector-diag__warn[data-v-3a8ac2f1] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-warning, #f59e0b) 45%, transparent);\r\n  color: var(--acu-warning, #f59e0b);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-vector-diag__block[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-vector-diag__query-box[data-v-3a8ac2f1] {\r\n  margin: 0;\r\n  padding: 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent);\r\n  background: color-mix(in srgb, var(--acu-bg-2, #111) 60%, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  max-height: 220px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__items[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  max-height: 360px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__item[data-v-3a8ac2f1] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-vector-diag__item-head[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-v2-vector-diag__kind[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-diag__scores[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-accent, #6ee7b7);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n}\n.acu-v2-vector-diag__summary[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-1);\r\n  line-height: 1.45;\n}\n.acu-v2-vector-diag__chunk[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.45;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-3a8ac2f1");
-    var VectorIndexPage_vue_vue_type_style_index_0_scoped_3a8ac2f1_lang = null;
+    injectSfcStyle("\n.acu-v2-vector-index-page[data-v-daa96f2b] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-daa96f2b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-daa96f2b] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-daa96f2b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-daa96f2b] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-daa96f2b]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-daa96f2b] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-daa96f2b] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-daa96f2b] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-daa96f2b] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__subconfig[data-v-daa96f2b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  padding-top: 8px;\n}\n.acu-v2-vector-index-page__section-title[data-v-daa96f2b] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-vector-index-page__checkbox-group[data-v-daa96f2b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 16px;\n}\n.acu-v2-vector-api-form__inline-action[data-v-daa96f2b] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-vector-api-form__muted[data-v-daa96f2b] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-api-form__danger[data-v-daa96f2b] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-danger, #ef4444);\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-daa96f2b] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-daa96f2b] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-daa96f2b] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-daa96f2b] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-daa96f2b] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-daa96f2b] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-diag__toolbar[data-v-daa96f2b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-vector-diag__toolbar[data-v-daa96f2b] > :first-child {\r\n  flex: 1 1 280px;\n}\n.acu-v2-vector-diag__body[data-v-daa96f2b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  margin-top: 10px;\n}\n.acu-v2-vector-diag__meta[data-v-daa96f2b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px 18px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-2, var(--acu-text-1));\n}\n.acu-v2-vector-diag__warn[data-v-daa96f2b] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-warning, #f59e0b) 45%, transparent);\r\n  color: var(--acu-warning, #f59e0b);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-vector-diag__block[data-v-daa96f2b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-vector-diag__query-box[data-v-daa96f2b] {\r\n  margin: 0;\r\n  padding: 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent);\r\n  background: color-mix(in srgb, var(--acu-bg-2, #111) 60%, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  max-height: 220px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__items[data-v-daa96f2b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  max-height: 360px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__item[data-v-daa96f2b] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-vector-diag__item-head[data-v-daa96f2b] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-v2-vector-diag__kind[data-v-daa96f2b] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-diag__scores[data-v-daa96f2b] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-accent, #6ee7b7);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n}\n.acu-v2-vector-diag__summary[data-v-daa96f2b] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-1);\r\n  line-height: 1.45;\n}\n.acu-v2-vector-diag__chunk[data-v-daa96f2b] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.45;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-daa96f2b");
+    var VectorIndexPage_vue_vue_type_style_index_0_scoped_daa96f2b_lang = null;
 
     const _hoisted_1$h = { class: "acu-v2-vector-index-page" };
     const _hoisted_2$g = { class: "acu-v2-vector-index-page__panel-stack" };
@@ -144420,7 +144460,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				}, 8, ["variant"])]),
 				default: withCtx(() => [
 					createVNode($setup["AcuStatsList"], { items: $setup.vector.statusStatsItems.value }, null, 8, ["items"]),
-					_cache[39] || (_cache[39] = createBaseVNode(
+					_cache[35] || (_cache[35] = createBaseVNode(
 						"p",
 						{ class: "acu-v2-vector-index-page__hint" },
 						" 流程：先按「被向量化的列」建库并初筛出编码 → 再按「推进 AI 注入列」只把命中编码的这些列喂给剧情推进 AI（主模型世界书不被长正文污染）。 ",
@@ -144476,50 +144516,33 @@ Expected function or array of functions, received type ${typeof value}.`
 							))])]),
 							_: 1
 						}),
-						!$setup.devOptions.vectorIndexAdvanced.value ? (openBlock(), createElementBlock("div", _hoisted_6$a, [
-							createVNode($setup["AcuFormRow"], {
-								label: "启用向量最少纪要数",
-								hint: "纪要达到该行数才开启向量初筛（小聊天想立刻测试可设 1～20）。"
-							}, {
-								default: withCtx(() => [createVNode($setup["AcuInput"], {
-									"model-value": $setup.vector.form.summaryIndexKeywordMinRows,
-									type: "number",
-									min: 1,
-									step: 1,
-									onChange: _cache[0] || (_cache[0] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
-								}, null, 8, ["model-value"])]),
-								_: 1
-							}),
-							createVNode($setup["AcuFormRow"], {
-								label: "固定排除最新条数",
-								hint: "最新 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
-							}, {
-								default: withCtx(() => [createVNode($setup["AcuInput"], {
-									"model-value": $setup.vector.form.recentFixedExcludeCount,
-									type: "number",
-									min: 0,
-									step: 1,
-									"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.vector.previewRecentFixedExcludeCount($event)),
-									onChange: _cache[2] || (_cache[2] = ($event) => $setup.vector.setNonNegativeNumberField("recentFixedExcludeCount", $event))
-								}, null, 8, ["model-value"])]),
-								_: 1
-							}),
-							createVNode($setup["AcuFormRow"], {
-								label: "向量最多召回条数（TopK）",
-								hint: "从排除近期后的更早历史里最多捞几条。"
-							}, {
-								default: withCtx(() => [createVNode($setup["AcuInput"], {
-									"model-value": $setup.vector.form.topK,
-									type: "number",
-									min: 1,
-									step: 1,
-									onChange: _cache[3] || (_cache[3] = ($event) => $setup.vector.setNumberField("topK", $event))
-								}, null, 8, ["model-value"])]),
-								_: 1
-							})
-						])) : createCommentVNode("v-if", true)
+						!$setup.devOptions.vectorIndexAdvanced.value ? (openBlock(), createElementBlock("div", _hoisted_6$a, [createVNode($setup["AcuFormRow"], {
+							label: "启用向量最少纪要数",
+							hint: "纪要达到该行数才开启向量初筛（小聊天想立刻测试可设 1～20）。"
+						}, {
+							default: withCtx(() => [createVNode($setup["AcuInput"], {
+								"model-value": $setup.vector.form.summaryIndexKeywordMinRows,
+								type: "number",
+								min: 1,
+								step: 1,
+								onChange: _cache[0] || (_cache[0] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
+							}, null, 8, ["model-value"])]),
+							_: 1
+						}), createVNode($setup["AcuFormRow"], {
+							label: "向量最多召回条数（TopK）",
+							hint: "从排除近期后的更早历史里最多捞几条。"
+						}, {
+							default: withCtx(() => [createVNode($setup["AcuInput"], {
+								"model-value": $setup.vector.form.topK,
+								type: "number",
+								min: 1,
+								step: 1,
+								onChange: _cache[1] || (_cache[1] = ($event) => $setup.vector.setNumberField("topK", $event))
+							}, null, 8, ["model-value"])]),
+							_: 1
+						})])) : createCommentVNode("v-if", true)
 					]),
-					_cache[40] || (_cache[40] = createBaseVNode(
+					_cache[36] || (_cache[36] = createBaseVNode(
 						"div",
 						{
 							class: "acu-v2-vector-index-page__maintenance-spacer",
@@ -144535,7 +144558,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							disabled: $setup.vector.buildBusy.value || $setup.vector.maintenanceBusy.value,
 							onClick: $setup.vector.buildNow
 						}, {
-							default: withCtx(() => [_cache[35] || (_cache[35] = createBaseVNode(
+							default: withCtx(() => [_cache[31] || (_cache[31] = createBaseVNode(
 								"i",
 								{ class: "fa-solid fa-brain" },
 								null,
@@ -144553,7 +144576,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							disabled: $setup.vector.maintenanceBusy.value || $setup.vector.buildBusy.value,
 							onClick: $setup.vector.migrateLegacyIndex
 						}, {
-							default: withCtx(() => [..._cache[36] || (_cache[36] = [createTextVNode(
+							default: withCtx(() => [..._cache[32] || (_cache[32] = [createTextVNode(
 								" 非破坏迁移旧索引 ",
 								-1
 								/* CACHED */
@@ -144564,7 +144587,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							disabled: $setup.vector.maintenanceBusy.value || $setup.vector.buildBusy.value,
 							onClick: $setup.vector.clearIndexCache
 						}, {
-							default: withCtx(() => [..._cache[37] || (_cache[37] = [createTextVNode(
+							default: withCtx(() => [..._cache[33] || (_cache[33] = [createTextVNode(
 								" 清空临时缓存 ",
 								-1
 								/* CACHED */
@@ -144576,7 +144599,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							disabled: $setup.vector.maintenanceBusy.value || $setup.vector.buildBusy.value,
 							onClick: $setup.onDeleteCurrentIndex
 						}, {
-							default: withCtx(() => [..._cache[38] || (_cache[38] = [createTextVNode(
+							default: withCtx(() => [..._cache[34] || (_cache[34] = [createTextVNode(
 								" 删除当前索引 ",
 								-1
 								/* CACHED */
@@ -144593,7 +144616,7 @@ Expected function or array of functions, received type ${typeof value}.`
 			}, {
 				default: withCtx(() => [
 					createBaseVNode("div", _hoisted_8$8, [
-						_cache[41] || (_cache[41] = createBaseVNode(
+						_cache[37] || (_cache[37] = createBaseVNode(
 							"div",
 							{ class: "acu-v2-vector-index-page__section-title" },
 							"标签清洗与字数截取（构造检索文本前生效）",
@@ -144609,7 +144632,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								class: "acu-v2-vector-api-form__instruction-textarea",
 								rows: "2",
 								placeholder: "例如：标签触发, summary, thinking, options",
-								onChange: _cache[4] || (_cache[4] = ($event) => $setup.vector.setApiField("queryStripTags", $event.target.value))
+								onChange: _cache[2] || (_cache[2] = ($event) => $setup.vector.setApiField("queryStripTags", $event.target.value))
 							}, null, 40, _hoisted_9$7)]),
 							_: 1
 						}),
@@ -144622,7 +144645,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 50,
-								onChange: _cache[5] || (_cache[5] = ($event) => $setup.vector.setNumberField("queryTailCharLimit", $event))
+								onChange: _cache[3] || (_cache[3] = ($event) => $setup.vector.setNumberField("queryTailCharLimit", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						})
@@ -144634,7 +144657,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						default: withCtx(() => [createVNode($setup["AcuToggle"], {
 							"model-value": $setup.vector.form.keywordGenerationEnabled,
 							label: "发送前调用 AI 生成检索关键词",
-							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.vector.setBooleanField("keywordGenerationEnabled", $event))
+							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.vector.setBooleanField("keywordGenerationEnabled", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -144649,7 +144672,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								options: $setup.keywordApiOptions,
 								"model-value": $setup.vector.form.keywordApiPreset,
 								placeholder: $setup.followActiveApiLabel,
-								"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.vector.setApiField("keywordApiPreset", $event))
+								"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.vector.setApiField("keywordApiPreset", $event))
 							}, null, 8, [
 								"options",
 								"model-value",
@@ -144665,7 +144688,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[8] || (_cache[8] = ($event) => $setup.vector.setNumberField("keywordContextPairCount", $event))
+								onChange: _cache[6] || (_cache[6] = ($event) => $setup.vector.setNumberField("keywordContextPairCount", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}), createVNode($setup["AcuFormRow"], {
@@ -144677,7 +144700,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[9] || (_cache[9] = ($event) => $setup.vector.setNumberField("keywordGenerationMaxAttempts", $event))
+								onChange: _cache[7] || (_cache[7] = ($event) => $setup.vector.setNumberField("keywordGenerationMaxAttempts", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						})])],
@@ -144699,7 +144722,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					},
 					[
 						createBaseVNode("fieldset", _hoisted_12$7, [
-							_cache[43] || (_cache[43] = createBaseVNode(
+							_cache[39] || (_cache[39] = createBaseVNode(
 								"legend",
 								null,
 								"Embedding",
@@ -144712,7 +144735,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							}, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.embeddingEndpoint,
-									"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.vectorApiConfig.form.embeddingEndpoint = $event),
+									"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.vectorApiConfig.form.embeddingEndpoint = $event),
 									type: "text",
 									placeholder: "https://example.com/v1/embeddings"
 								}, null, 8, ["modelValue"])]),
@@ -144721,7 +144744,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							createVNode($setup["AcuFormRow"], { label: "模型名" }, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.embeddingModel,
-									"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.vectorApiConfig.form.embeddingModel = $event),
+									"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.vectorApiConfig.form.embeddingModel = $event),
 									type: "text",
 									placeholder: "BAAI/bge-m3"
 								}, null, 8, ["modelValue"])]),
@@ -144730,7 +144753,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							createVNode($setup["AcuFormRow"], { label: "API 密钥" }, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.embeddingApiKey,
-									"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.vectorApiConfig.form.embeddingApiKey = $event),
+									"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.vectorApiConfig.form.embeddingApiKey = $event),
 									type: "password",
 									autocomplete: "off"
 								}, null, 8, ["modelValue"])]),
@@ -144741,7 +144764,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								disabled: $setup.vectorApiConfig.embeddingModelLoadStatus.value === "loading",
 								onClick: $setup.vectorApiConfig.loadEmbeddingModels
 							}, {
-								default: withCtx(() => [..._cache[42] || (_cache[42] = [createTextVNode(
+								default: withCtx(() => [..._cache[38] || (_cache[38] = [createTextVNode(
 									" 加载模型 ",
 									-1
 									/* CACHED */
@@ -144762,13 +144785,13 @@ Expected function or array of functions, received type ${typeof value}.`
 									options: $setup.embeddingModelOptions,
 									"model-value": $setup.vectorApiConfig.form.embeddingModel,
 									placeholder: "请选择模型",
-									"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.vectorApiConfig.form.embeddingModel = $event)
+									"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.vectorApiConfig.form.embeddingModel = $event)
 								}, null, 8, ["options", "model-value"])]),
 								_: 1
 							})) : createCommentVNode("v-if", true)
 						]),
 						createBaseVNode("fieldset", _hoisted_16$6, [
-							_cache[45] || (_cache[45] = createBaseVNode(
+							_cache[41] || (_cache[41] = createBaseVNode(
 								"legend",
 								null,
 								"Rerank",
@@ -144781,7 +144804,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							}, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.rerankEndpoint,
-									"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.vectorApiConfig.form.rerankEndpoint = $event),
+									"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.vectorApiConfig.form.rerankEndpoint = $event),
 									type: "text",
 									placeholder: "https://example.com/v1/rerank"
 								}, null, 8, ["modelValue"])]),
@@ -144790,7 +144813,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							createVNode($setup["AcuFormRow"], { label: "模型名" }, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.rerankModel,
-									"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.vectorApiConfig.form.rerankModel = $event),
+									"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.vectorApiConfig.form.rerankModel = $event),
 									type: "text",
 									placeholder: "BAAI/bge-reranker-v2-m3"
 								}, null, 8, ["modelValue"])]),
@@ -144799,7 +144822,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							createVNode($setup["AcuFormRow"], { label: "API 密钥" }, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.rerankApiKey,
-									"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.vectorApiConfig.form.rerankApiKey = $event),
+									"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.vectorApiConfig.form.rerankApiKey = $event),
 									type: "password",
 									autocomplete: "off"
 								}, null, 8, ["modelValue"])]),
@@ -144810,7 +144833,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								disabled: $setup.vectorApiConfig.rerankModelLoadStatus.value === "loading",
 								onClick: $setup.vectorApiConfig.loadRerankModels
 							}, {
-								default: withCtx(() => [..._cache[44] || (_cache[44] = [createTextVNode(
+								default: withCtx(() => [..._cache[40] || (_cache[40] = [createTextVNode(
 									" 加载模型 ",
 									-1
 									/* CACHED */
@@ -144831,7 +144854,7 @@ Expected function or array of functions, received type ${typeof value}.`
 									options: $setup.rerankModelOptions,
 									"model-value": $setup.vectorApiConfig.form.rerankModel,
 									placeholder: "请选择模型",
-									"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.vectorApiConfig.form.rerankModel = $event)
+									"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.vectorApiConfig.form.rerankModel = $event)
 								}, null, 8, ["options", "model-value"])]),
 								_: 1
 							})) : createCommentVNode("v-if", true),
@@ -144842,7 +144865,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								default: withCtx(() => [withDirectives(createBaseVNode(
 									"textarea",
 									{
-										"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.vectorApiConfig.form.rerankInstruction = $event),
+										"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.vectorApiConfig.form.rerankInstruction = $event),
 										class: "acu-v2-vector-api-form__instruction-textarea",
 										rows: "3",
 										placeholder: "留空则不发送 instruction"
@@ -144879,7 +144902,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							variant: "primary",
 							"native-type": "submit"
 						}, {
-							default: withCtx(() => [..._cache[46] || (_cache[46] = [createTextVNode(
+							default: withCtx(() => [..._cache[42] || (_cache[42] = [createTextVNode(
 								"保存",
 								-1
 								/* CACHED */
@@ -144908,7 +144931,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					key: 0,
 					kind: "warning"
 				}, {
-					default: withCtx(() => [..._cache[47] || (_cache[47] = [createTextVNode(
+					default: withCtx(() => [..._cache[43] || (_cache[43] = [createTextVNode(
 						" 关键词生成提示词为空，发送前会直接用用户输入参与召回；建议载入默认提示词后保存。 ",
 						-1
 						/* CACHED */
@@ -144916,9 +144939,9 @@ Expected function or array of functions, received type ${typeof value}.`
 					_: 1
 				})) : createCommentVNode("v-if", true), createBaseVNode("div", _hoisted_21$5, [createVNode($setup["AcuButton"], {
 					variant: "primary",
-					onClick: _cache[19] || (_cache[19] = ($event) => $setup.promptDrawerOpen = true)
+					onClick: _cache[17] || (_cache[17] = ($event) => $setup.promptDrawerOpen = true)
 				}, {
-					default: withCtx(() => [..._cache[48] || (_cache[48] = [createTextVNode(
+					default: withCtx(() => [..._cache[44] || (_cache[44] = [createTextVNode(
 						"编辑提示词",
 						-1
 						/* CACHED */
@@ -144948,7 +144971,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							type: "number",
 							min: 1,
 							step: 1,
-							onChange: _cache[20] || (_cache[20] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
+							onChange: _cache[18] || (_cache[18] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -144961,7 +144984,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							type: "number",
 							min: 1,
 							step: 1,
-							onChange: _cache[21] || (_cache[21] = ($event) => $setup.vector.setNumberField("topK", $event))
+							onChange: _cache[19] || (_cache[19] = ($event) => $setup.vector.setNumberField("topK", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -144975,7 +144998,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							min: 0,
 							max: 1,
 							step: .01,
-							onChange: _cache[22] || (_cache[22] = ($event) => $setup.vector.setMinScore($event))
+							onChange: _cache[20] || (_cache[20] = ($event) => $setup.vector.setMinScore($event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -144988,21 +145011,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							type: "number",
 							min: 1,
 							step: 1,
-							onChange: _cache[23] || (_cache[23] = ($event) => $setup.vector.setNumberField("recallCandidateLimit", $event))
-						}, null, 8, ["model-value"])]),
-						_: 1
-					}),
-					createVNode($setup["AcuFormRow"], {
-						label: "固定排除（排除最新 N 条）",
-						hint: "最新的 N 条纪要不参与检索也不注入（近期的正文已在上下文里，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
-					}, {
-						default: withCtx(() => [createVNode($setup["AcuInput"], {
-							"model-value": $setup.vector.form.recentFixedExcludeCount,
-							type: "number",
-							min: 0,
-							step: 1,
-							"onUpdate:modelValue": _cache[24] || (_cache[24] = ($event) => $setup.vector.previewRecentFixedExcludeCount($event)),
-							onChange: _cache[25] || (_cache[25] = ($event) => $setup.vector.setNonNegativeNumberField("recentFixedExcludeCount", $event))
+							onChange: _cache[21] || (_cache[21] = ($event) => $setup.vector.setNumberField("recallCandidateLimit", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -145014,7 +145023,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							"model-value": $setup.vector.form.vectorNamespace,
 							type: "text",
 							placeholder: "chat",
-							onChange: _cache[26] || (_cache[26] = ($event) => $setup.vector.setApiField("vectorNamespace", $event))
+							onChange: _cache[22] || (_cache[22] = ($event) => $setup.vector.setApiField("vectorNamespace", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})
@@ -145036,7 +145045,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[27] || (_cache[27] = ($event) => $setup.vector.setNumberField("summaryChunkSentenceCount", $event))
+								onChange: _cache[23] || (_cache[23] = ($event) => $setup.vector.setNumberField("summaryChunkSentenceCount", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -145049,7 +145058,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[28] || (_cache[28] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveMaxConcurrency", $event))
+								onChange: _cache[24] || (_cache[24] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveMaxConcurrency", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -145088,7 +145097,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						default: withCtx(() => [createVNode($setup["AcuToggle"], {
 							"model-value": $setup.vector.form.summaryIndexV2WriteEnabled,
 							label: "允许 V2 快照写入",
-							"onUpdate:modelValue": _cache[29] || (_cache[29] = ($event) => $setup.vector.setBooleanField("summaryIndexV2WriteEnabled", $event))
+							"onUpdate:modelValue": _cache[25] || (_cache[25] = ($event) => $setup.vector.setBooleanField("summaryIndexV2WriteEnabled", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
@@ -145103,7 +145112,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							rows: "4",
 							spellcheck: "false",
 							placeholder: "每行一个 scope fingerprint",
-							onChange: _cache[30] || (_cache[30] = ($event) => $setup.vector.setV2WriteScopeAllowlist($event.target.value))
+							onChange: _cache[26] || (_cache[26] = ($event) => $setup.vector.setV2WriteScopeAllowlist($event.target.value))
 						}, null, 40, _hoisted_24$3)]),
 						_: 1
 					})) : createCommentVNode("v-if", true)
@@ -145131,7 +145140,7 @@ Expected function or array of functions, received type ${typeof value}.`
 			default: withCtx(() => [createBaseVNode("div", _hoisted_25$3, [
 				createVNode($setup["AcuInput"], {
 					modelValue: $setup.vector.testUserInput.value,
-					"onUpdate:modelValue": _cache[31] || (_cache[31] = ($event) => $setup.vector.testUserInput.value = $event),
+					"onUpdate:modelValue": _cache[27] || (_cache[27] = ($event) => $setup.vector.testUserInput.value = $event),
 					type: "text",
 					placeholder: "输入测试台词（留空则自动读取最近一条用户发言，搭配当前 AI 末尾句试跑）"
 				}, null, 8, ["modelValue"]),
@@ -145151,7 +145160,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					disabled: $setup.vector.testRecallBusy.value,
 					onClick: $setup.vector.refreshRecallDiagnostics
 				}, {
-					default: withCtx(() => [..._cache[49] || (_cache[49] = [createTextVNode(
+					default: withCtx(() => [..._cache[45] || (_cache[45] = [createTextVNode(
 						" 刷新记录 ",
 						-1
 						/* CACHED */
@@ -145160,7 +145169,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				}, 8, ["disabled", "onClick"])
 			]), !$setup.diagData ? (openBlock(), createElementBlock("p", _hoisted_26$3, " 暂无召回记录。你可以直接点「测试召回效果」试跑一次，或在聊天中发送一条消息后再点「刷新记录」。 ")) : (openBlock(), createElementBlock("div", _hoisted_27$3, [
 				createBaseVNode("div", _hoisted_28$2, [
-					createBaseVNode("span", null, [_cache[50] || (_cache[50] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[46] || (_cache[46] = createBaseVNode(
 						"strong",
 						null,
 						"运行方式：",
@@ -145171,7 +145180,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						1
 						/* TEXT */
 					)]),
-					createBaseVNode("span", null, [_cache[51] || (_cache[51] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[47] || (_cache[47] = createBaseVNode(
 						"strong",
 						null,
 						"构造模式：",
@@ -145182,7 +145191,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						1
 						/* TEXT */
 					)]),
-					createBaseVNode("span", null, [_cache[52] || (_cache[52] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[48] || (_cache[48] = createBaseVNode(
 						"strong",
 						null,
 						"耗时：",
@@ -145193,7 +145202,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						1
 						/* TEXT */
 					)]),
-					createBaseVNode("span", null, [_cache[53] || (_cache[53] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[49] || (_cache[49] = createBaseVNode(
 						"strong",
 						null,
 						"Rerank：",
@@ -145204,7 +145213,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						1
 						/* TEXT */
 					)]),
-					createBaseVNode("span", null, [_cache[54] || (_cache[54] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[50] || (_cache[50] = createBaseVNode(
 						"strong",
 						null,
 						"候选漏斗：",
@@ -145236,7 +145245,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					1
 					/* TEXT */
 				)])) : createCommentVNode("v-if", true),
-				createBaseVNode("div", _hoisted_33$1, [_cache[55] || (_cache[55] = createBaseVNode(
+				createBaseVNode("div", _hoisted_33$1, [_cache[51] || (_cache[51] = createBaseVNode(
 					"div",
 					{ class: "acu-v2-vector-index-page__section-title" },
 					"实际送入匹配的检索文本（Query Text）",
@@ -145278,7 +145287,7 @@ Expected function or array of functions, received type ${typeof value}.`
 									1024
 									/* DYNAMIC_SLOTS */
 								),
-								_cache[56] || (_cache[56] = createBaseVNode(
+								_cache[52] || (_cache[52] = createBaseVNode(
 									"span",
 									{ class: "acu-v2-vector-diag__kind" },
 									"向量/重排命中",
@@ -145328,7 +145337,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								1
 								/* TEXT */
 							)) : createCommentVNode("v-if", true),
-							item.matchedChunkText ? (openBlock(), createElementBlock("div", _hoisted_41, [_cache[57] || (_cache[57] = createBaseVNode(
+							item.matchedChunkText ? (openBlock(), createElementBlock("div", _hoisted_41, [_cache[53] || (_cache[53] = createBaseVNode(
 								"strong",
 								null,
 								"命中分片：",
@@ -145353,11 +145362,11 @@ Expected function or array of functions, received type ${typeof value}.`
 			dirty: $setup.vector.promptDirty.value,
 			message: $setup.vector.message.value,
 			"role-options": $setup.ROLE_OPTIONS,
-			onClose: _cache[32] || (_cache[32] = ($event) => $setup.promptDrawerOpen = false),
+			onClose: _cache[28] || (_cache[28] = ($event) => $setup.promptDrawerOpen = false),
 			onSave: $setup.vector.savePromptGroup,
 			onReset: $setup.vector.resetPromptGroup,
-			onAdd: _cache[33] || (_cache[33] = ($event) => $setup.vector.addPromptSegment($event)),
-			onDelete: _cache[34] || (_cache[34] = ($event) => $setup.vector.deletePromptSegment($event)),
+			onAdd: _cache[29] || (_cache[29] = ($event) => $setup.vector.addPromptSegment($event)),
+			onDelete: _cache[30] || (_cache[30] = ($event) => $setup.vector.deletePromptSegment($event)),
 			onUpdate: $setup.onPromptUpdate
 		}, null, 8, [
 			"is-open",
@@ -145369,7 +145378,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		])
 	]);
     }
-    var VectorIndexPage = /*#__PURE__*/ _export_sfc(_sfc_main$h, [["render", _sfc_render$h], ["__scopeId", "data-v-3a8ac2f1"]]);
+    var VectorIndexPage = /*#__PURE__*/ _export_sfc(_sfc_main$h, [["render", _sfc_render$h], ["__scopeId", "data-v-daa96f2b"]]);
 
     const dataMgmtCopy = {
         panels: {

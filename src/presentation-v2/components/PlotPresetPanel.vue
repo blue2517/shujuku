@@ -102,6 +102,21 @@
           @change="store.setWorldbookScanDepth($event)"
         />
       </AcuFormRow>
+      <AcuFormRow
+        class="acu-plot-preset-panel__context-full"
+        label="固定排除（排除最新 N 条）"
+        hint="最新的 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；无论是否开启交火模式或触发向量召回，发给推进 AI 的纪要与本地直出均会排除最新 N 条；填 0 表示不排除。"
+      >
+        <AcuInput
+          :model-value="recentExclude.recentFixedExcludeCount.value"
+          type="number"
+          :min="0"
+          :step="1"
+          data-acu-plot-field="recentFixedExcludeCount"
+          @update:model-value="recentExclude.preview($event)"
+          @change="recentExclude.commit($event)"
+        />
+      </AcuFormRow>
     </div>
 
     <PlotPresetDrawer
@@ -144,6 +159,7 @@ import { useChatChangedTick } from "../composables/useChatChangedListener";
 import { useDevOptions } from "../composables/useDevOptions";
 import { useApiPresetSelectOptions } from "../composables/useApiPresetSelectOptions";
 import { usePlotPresetManagement } from "../composables/usePlotPresetManagement";
+import { useRecentFixedExcludeConfig } from "../composables/useRecentFixedExcludeConfig";
 import { useUiCloseGuard } from "../composables/useUiCloseGuard";
 import { plotCopy } from "../copy/plot-copy";
 import { useDialogStore } from "../stores/dialog-store";
@@ -161,7 +177,7 @@ import AcuSelect from "./_lib/AcuSelect.vue";
 import AcuText from "./_lib/AcuText.vue";
 import PlotPresetDrawer from "./PlotPresetDrawer.vue";
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     showEdit?: boolean;
     showApiPreset?: boolean;
@@ -183,6 +199,7 @@ const {
   apiPresetSelectOptions: pageApiSelectOptions,
 } = useApiPresetSelectOptions();
 const management = usePlotPresetManagement();
+const recentExclude = useRecentFixedExcludeConfig();
 const devOptions = useDevOptions();
 
 const presetDropdownItems = computed<PresetDropdownItem[]>(() => [
@@ -260,6 +277,9 @@ async function onImportFile(file: File): Promise<void> {
 function refreshAll(): void {
   store.refreshFromSettings();
   apiStore.refreshFromSettings();
+  if (props.showContextSettings) {
+    recentExclude.refresh();
+  }
 }
 
 onMounted(refreshAll);
@@ -287,6 +307,10 @@ watch(useChatChangedTick(), refreshAll);
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-top: 12px;
+}
+
+.acu-plot-preset-panel__context-full {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 640px) {

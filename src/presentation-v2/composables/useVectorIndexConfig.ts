@@ -53,11 +53,6 @@ function getDefaultVectorMemoryConfigForV2(): VectorMemoryConfigWithSummaryConcu
   return defaultVectorMemoryConfig_ACU as VectorMemoryConfigWithSummaryConcurrency;
 }
 
-function getDefaultRecentFixedExcludeCount(): number {
-  const value = Number((getDefaultVectorMemoryConfigForV2() as any).recentFixedExcludeCount);
-  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 5;
-}
-
 function getDefaultRollingDeltaFoldThreshold(): number {
   const value = Number((getDefaultVectorMemoryConfigForV2() as any).summaryIndexRollingDeltaFoldThreshold);
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 15;
@@ -82,7 +77,6 @@ export interface VectorIndexForm {
   topK: number;
   minScore: number;
   recallCandidateLimit: number;
-  recentFixedExcludeCount: number;
   summaryIndexVectorColumns: string[];
   summaryIndexPlotInjectColumns: string[];
   vectorNamespace: string;
@@ -153,7 +147,6 @@ function createEmptyForm(): VectorIndexForm {
     topK: defaults.topK,
     minScore: defaults.minScore,
     recallCandidateLimit: defaults.recallCandidateLimit,
-    recentFixedExcludeCount: getDefaultRecentFixedExcludeCount(),
     summaryIndexVectorColumns: Array.isArray((defaults as any).summaryIndexVectorColumns) ? [...(defaults as any).summaryIndexVectorColumns] : [],
     summaryIndexPlotInjectColumns: Array.isArray((defaults as any).summaryIndexPlotInjectColumns) ? [...(defaults as any).summaryIndexPlotInjectColumns] : [],
     vectorNamespace: defaults.vectorNamespace || 'chat',
@@ -260,9 +253,6 @@ export function useVectorIndexConfig() {
     form.topK = config.topK;
     form.minScore = config.minScore;
     form.recallCandidateLimit = config.recallCandidateLimit;
-    form.recentFixedExcludeCount = Number.isFinite(Number((config as any).recentFixedExcludeCount)) && Number((config as any).recentFixedExcludeCount) >= 0
-      ? Math.floor(Number((config as any).recentFixedExcludeCount))
-      : getDefaultRecentFixedExcludeCount();
     form.summaryIndexVectorColumns = Array.isArray((config as any).summaryIndexVectorColumns)
       ? [...(config as any).summaryIndexVectorColumns]
       : [];
@@ -394,38 +384,6 @@ export function useVectorIndexConfig() {
     pushSavedMessage();
   }
 
-  function setNonNegativeNumberField<
-    K extends 'recentFixedExcludeCount',
-  >(key: K, raw: number | string): void {
-    const trimmed = typeof raw === 'string' ? raw.trim() : raw;
-    const parsed = trimmed === '' ? Number.NaN : Number(trimmed);
-    if (key === 'recentFixedExcludeCount' && (!Number.isFinite(parsed) || parsed < 0)) {
-      const fallback = getDefaultRecentFixedExcludeCount();
-      form.recentFixedExcludeCount = Number.isFinite(parsed) ? Math.floor(parsed) : 0;
-      toast.warning(`固定排除必须是非负整数，已重置为默认值 ${fallback}。`);
-      form.recentFixedExcludeCount = fallback;
-      const result = updateGlobalVectorMemoryConfigFields_ACU({
-        recentFixedExcludeCount: fallback,
-      });
-      if (!result.ok) {
-        toast.error(result.message || '保存失败。');
-        return;
-      }
-      runValidation();
-      pushSavedMessage();
-      return;
-    }
-    const num = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
-    (form as any)[key] = num;
-    const result = updateGlobalVectorMemoryConfigFields_ACU({ [key]: num });
-    if (!result.ok) {
-      toast.error(result.message || '保存失败。');
-      return;
-    }
-    runValidation();
-    pushSavedMessage();
-  }
-
   function setBooleanField<
     K extends 'summaryIndexRollingDeltaEnabled' | 'summaryIndexV2WriteEnabled' | 'summaryIndexContentPackWriteEnabled' | 'keywordGenerationEnabled',
   >(key: K, value: boolean): void {
@@ -474,11 +432,6 @@ export function useVectorIndexConfig() {
     }
     runValidation();
     pushSavedMessage();
-  }
-
-  function previewRecentFixedExcludeCount(raw: number | string): void {
-    const value = Number(raw);
-    form.recentFixedExcludeCount = Number.isFinite(value) ? Math.floor(value) : 0;
   }
 
   function setMinScore(raw: number | string): void {
@@ -754,10 +707,8 @@ export function useVectorIndexConfig() {
     clearIndexCache,
     deleteCurrentIndex,
     migrateLegacyIndex,
-    previewRecentFixedExcludeCount,
     setApiField,
     setNumberField,
-    setNonNegativeNumberField,
     setBooleanField,
     toggleColumnSelection,
     setV2WriteScopeAllowlist,

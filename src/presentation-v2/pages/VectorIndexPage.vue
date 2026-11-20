@@ -69,19 +69,6 @@
                 />
               </AcuFormRow>
               <AcuFormRow
-                label="固定排除最新条数"
-                hint="最新 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
-              >
-                <AcuInput
-                  :model-value="vector.form.recentFixedExcludeCount"
-                  type="number"
-                  :min="0"
-                  :step="1"
-                  @update:model-value="vector.previewRecentFixedExcludeCount($event)"
-                  @change="vector.setNonNegativeNumberField('recentFixedExcludeCount', $event)"
-                />
-              </AcuFormRow>
-              <AcuFormRow
                 label="向量最多召回条数（TopK）"
                 hint="从排除近期后的更早历史里最多捞几条。"
               >
@@ -453,19 +440,6 @@
               :min="1"
               :step="1"
               @change="vector.setNumberField('recallCandidateLimit', $event)"
-            />
-          </AcuFormRow>
-          <AcuFormRow
-            label="固定排除（排除最新 N 条）"
-            hint="最新的 N 条纪要不参与检索也不注入（近期的正文已在上下文里，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
-          >
-            <AcuInput
-              :model-value="vector.form.recentFixedExcludeCount"
-              type="number"
-              :min="0"
-              :step="1"
-              @update:model-value="vector.previewRecentFixedExcludeCount($event)"
-              @change="vector.setNonNegativeNumberField('recentFixedExcludeCount', $event)"
             />
           </AcuFormRow>
           <AcuFormRow

@@ -50,7 +50,7 @@
     <div class="acu-v2-plot-match-fields__toggle-row">
       <AcuFormRow
         label="纪要不足时本地直出"
-        hint="开启后，当大纲/纪要条数 ≤ zhaohui 时跳过 AI 推进请求，直接提取索引编码注入最终提示词（交火模式下会自动排除最近固定排除的 N 条），降低延迟并节省 Token。"
+        hint="开启后，当大纲/纪要条数 ≤ zhaohui 时跳过 AI 推进请求，直接提取索引编码注入最终提示词（会自动排除「固定排除」设置的最新 N 条），降低延迟并节省 Token。"
       >
         <AcuToggle
           :model-value="!!directRecallWhenBelowThreshold"

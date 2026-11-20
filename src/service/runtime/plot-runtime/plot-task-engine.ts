@@ -223,14 +223,15 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
         ? vectorConfig.summaryIndexPlotInjectColumns.filter(Boolean)
         : [];
       const isolationKey = settings_ACU?.dataIsolationEnabled ? String(settings_ACU?.dataIsolationCode || '') : '';
-      const recallSnapshot = getLatestSummaryVectorRecallSnapshot_ACU(currentChatFileIdentifier_ACU || undefined, isolationKey);
       const isCrossfireModeEnabled =
         globalMeta_ACU?.summaryVectorIndexModeGlobal === true
         || settings_ACU?.summaryVectorIndexModeDefault === true;
+      const rawRecallSnapshot = getLatestSummaryVectorRecallSnapshot_ACU(currentChatFileIdentifier_ACU || undefined, isolationKey);
+      const recallSnapshot = isCrossfireModeEnabled ? rawRecallSnapshot : null;
       const rawRecentExcludeCount = Math.max(0, Math.floor(Number((vectorConfig as any)?.recentFixedExcludeCount) || 0));
-      effectiveRecentExcludeCount = isCrossfireModeEnabled ? rawRecentExcludeCount : 0;
-      // 交火模式已启用但未触发向量召回（无 recallSnapshot，常见于纪要条数未达向量触发阈值）时，
-      // 传给推进 AI 的 $5 纪要同样排除最新 N 条，避免与近期正文重复或误导。
+      // 固定排除永远生效，与交火模式是否开启无关；仅当交火模式开启且已触发向量召回（存在 recallSnapshot）时，
+      // 初筛结果已排除最新 N 条，避免对召回结果二次排除。
+      effectiveRecentExcludeCount = rawRecentExcludeCount;
       const plotExcludeRecentCount = (!recallSnapshot && effectiveRecentExcludeCount > 0)
         ? effectiveRecentExcludeCount
         : 0;
@@ -274,19 +275,20 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
             + (plotExcludeRecentCount > 0 ? `（未触发向量召回，已固定排除最新 ${plotExcludeRecentCount} 条）` : ''),
           );
         } else if (currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object') {
-          const summaryIndexResult = plotExcludeRecentCount > 0
-            ? formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: plotExcludeRecentCount })
+          const rawTableExcludeCount = effectiveRecentExcludeCount;
+          const summaryIndexResult = rawTableExcludeCount > 0
+            ? formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: rawTableExcludeCount })
             : formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU);
           if (summaryIndexResult.success) {
             outlineTableContent = summaryIndexResult.content;
             logDebug_ACU(
               '[剧情推进] $5 未找到世界书纪要索引条目，使用纪要表的概要和编码索引列'
-              + (plotExcludeRecentCount > 0 ? `（已固定排除最新 ${plotExcludeRecentCount} 条）` : ''),
+              + (rawTableExcludeCount > 0 ? `（已固定排除最新 ${rawTableExcludeCount} 条）` : ''),
             );
           } else {
             logDebug_ACU('[剧情推进] $5 纪要表读取失败，回退使用总体大纲表。原因:', summaryIndexResult.content);
-            outlineTableContent = plotExcludeRecentCount > 0
-              ? formatOutlineTableForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: plotExcludeRecentCount })
+            outlineTableContent = rawTableExcludeCount > 0
+              ? formatOutlineTableForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: rawTableExcludeCount })
               : formatOutlineTableForPlot_ACU(currentJsonTableData_ACU);
             logDebug_ACU('[剧情推进] $5 回退使用总体大纲表内容');
           }

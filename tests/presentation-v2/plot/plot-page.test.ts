@@ -4,6 +4,7 @@
  * @vitest-environment jsdom
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { nextTick } from 'vue';
 
 const STORAGE_KEY = 'acu_v2_ui_state';
 
@@ -61,6 +62,7 @@ async function mountPlotPage(opts: {
     })),
   );
 
+  const saveSettings = vi.fn(() => ({ saved: true, storageType: 'memory' }));
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     settings_ACU: settings,
     currentChatFileIdentifier_ACU: 'chat-plot',
@@ -69,7 +71,7 @@ async function mountPlotPage(opts: {
     coreApisAreReady_ACU: true,
   }));
   vi.doMock('../../../src/service/settings/settings-service', () => ({
-    saveSettings_ACU: vi.fn(),
+    saveSettings_ACU: saveSettings,
     setGlobalPlotEnabled_ACU: vi.fn((val: boolean) => { settings.plotSettings.enabled = val; return val; }),
   }));
   vi.doMock('../../../src/service/ai/ai-service', () => ({
@@ -99,7 +101,7 @@ async function mountPlotPage(opts: {
   const mount = await import('../../../src/presentation-v2/bootstrap/mount');
   await mount.openAcuV2App();
   await new Promise(r => setTimeout(r, 0));
-  return { mount, settings, mockGetCurrentCharacterWorldbookBinding };
+  return { mount, settings, saveSettings, mockGetCurrentCharacterWorldbookBinding };
 }
 
 beforeEach(() => {
@@ -647,6 +649,49 @@ describe('PlotPage', () => {
 
     expect(settings.plotSettings.contextTurnCount).toBe(2);
     expect(settings.plotSettings.worldbookScanDepth).toBe(0);
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('剧情推进页渲染固定排除（排除最新 N 条），支持 0 与非负整数保存，负数时 toast 提示并重置为默认值 5', async () => {
+    const settings = createSettings();
+    settings.summaryVectorIndexModeDefault = false;
+    settings.vectorMemoryConfig = { recentFixedExcludeCount: 8 };
+    const alertSpy = vi.spyOn(window, 'alert');
+
+    const { mount, saveSettings } = await mountPlotPage({ settings });
+    await nextTick();
+
+    const pageText = document.querySelector('.acu-v2-plot-page')?.textContent || '';
+    expect(pageText).toContain('固定排除（排除最新 N 条）');
+
+    const input = document.querySelector('[data-acu-plot-field="recentFixedExcludeCount"] input') as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    expect(input!.min).toBe('0');
+    expect(input!.value).toBe('8');
+
+    input!.value = '0';
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+    input!.dispatchEvent(new Event('change', { bubbles: true }));
+    await nextTick();
+
+    expect(document.querySelector('.acu-v2-toast--warning')).toBeNull();
+    expect(settings.vectorMemoryConfig.recentFixedExcludeCount).toBe(0);
+    expect(input!.value).toBe('0');
+    expect(saveSettings).toHaveBeenCalled();
+
+    input!.value = '-1';
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+    input!.dispatchEvent(new Event('change', { bubbles: true }));
+    await nextTick();
+
+    expect(alertSpy).not.toHaveBeenCalled();
+    expect(document.querySelector('.acu-v2-toast--warning')?.textContent || '')
+      .toContain('固定排除必须是非负整数，已重置为默认值 5。');
+    expect(settings.vectorMemoryConfig.recentFixedExcludeCount).toBe(5);
+    expect(input!.value).toBe('5');
 
     mount.__resetAcuV2MountForTests();
   });

@@ -16,7 +16,7 @@ export function updateGlobalVectorMemoryConfigFields_ACU(
   const snapshot = JSON.parse(JSON.stringify(config));
   Object.assign(config as unknown as Record<string, unknown>, patch);
   const saveResult = saveSettings_ACU();
-  if (!saveResult.saved) {
+  if (saveResult && !saveResult.saved) {
     Object.assign(config as unknown as Record<string, unknown>, snapshot);
     settings_ACU.vectorMemoryConfig = config;
     return {

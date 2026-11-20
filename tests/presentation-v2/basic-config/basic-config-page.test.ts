@@ -172,6 +172,7 @@ describe('BasicConfigPage', () => {
     expect(text).toContain('表格模板预设');
     expect(text).toContain('打开可视化表格编辑器');
     expect(text).toContain('剧情推进预设');
+    expect(text).not.toContain('固定排除');
     expect(text).not.toContain('通常只有 API 连接需要你确认');
     const panelTitles = Array.from(page!.querySelectorAll('.acu-v2-basic-config-page__grid > .acu-panel .acu-panel__title'))
       .map(title => (title.textContent || '').trim());

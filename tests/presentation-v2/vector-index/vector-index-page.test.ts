@@ -595,40 +595,20 @@ describe('VectorIndexPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('固定排除条数允许输入 0，输入负数时显示 toast 并重置为默认值', async () => {
-    const { mount, config, saveSettings } = await mountVectorIndexPage({ devOptions: { vectorIndexAdvanced: true } });
-    const alertSpy = vi.spyOn(window, 'alert');
+  it('固定排除设置 UI 已移出交火模式页（基础与高级面板均不再渲染该输入框）', async () => {
+    const basicMount = await mountVectorIndexPage({ devOptions: { vectorIndexAdvanced: false } });
+    const basicLabels = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row__label'))
+      .map(el => el.textContent || '');
+    expect(basicLabels.some(label => /固定排除/.test(label))).toBe(false);
+    basicMount.mount.__resetAcuV2MountForTests();
 
-    const row = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
-      .find(el => /固定排除/.test(el.textContent || ''));
-    const input = row?.querySelector('input') as HTMLInputElement | null;
-    expect(input).not.toBeNull();
-    expect(input!.min).toBe('0');
-
-    input!.value = '0';
-    input!.dispatchEvent(new Event('input', { bubbles: true }));
-    await nextTick();
-    input!.dispatchEvent(new Event('change', { bubbles: true }));
-    await nextTick();
-
-    expect(document.querySelector('.acu-v2-toast--warning')).toBeNull();
-    expect(config.recentFixedExcludeCount).toBe(0);
-    expect(input!.value).toBe('0');
-
-    input!.value = '-1';
-    input!.dispatchEvent(new Event('input', { bubbles: true }));
-    await nextTick();
-    input!.dispatchEvent(new Event('change', { bubbles: true }));
-    await nextTick();
-
-    expect(alertSpy).not.toHaveBeenCalled();
-    expect(document.querySelector('.acu-v2-toast--warning')?.textContent || '')
-      .toContain('固定排除必须是非负整数，已重置为默认值 5。');
-    expect(config.recentFixedExcludeCount).toBe(5);
-    expect(input!.value).toBe('5');
-    expect(saveSettings).toHaveBeenCalled();
-
-    mount.__resetAcuV2MountForTests();
+    const advMount = await mountVectorIndexPage({ devOptions: { vectorIndexAdvanced: true } });
+    const advLabels = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row__label'))
+      .map(el => el.textContent || '');
+    expect(advLabels.some(label => /固定排除/.test(label))).toBe(false);
+    const recallPanelDesc = document.querySelector('#vector-index-recall-panel .acu-panel__description-region')?.textContent || '';
+    expect(recallPanelDesc).toContain('剧情推进');
+    advMount.mount.__resetAcuV2MountForTests();
   });
 
   it('每批归档行数写入交火索引实际读取的 summaryIndexArchiveMaxConcurrency 字段', async () => {
