@@ -94,7 +94,10 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine';
   }
 
   /** [剧情推进专用] $5 只注入"总体大纲"表（含表头） */
-  export function formatOutlineTableForPlot_ACU(allTablesJson: any) {
+  export function formatOutlineTableForPlot_ACU(
+    allTablesJson: any,
+    options: { excludeRecentCount?: number } = {},
+  ) {
     try {
       if (!allTablesJson || typeof allTablesJson !== 'object') {
         return '总体大纲表：未获取到表格数据。';
@@ -110,7 +113,11 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine';
       let out = `## 表格: 总体大纲\n`;
       out += headers.length ? `Columns: ${headers.join(', ')}\n` : 'Columns: (无表头)\n';
 
-      const rows = outline.content.slice(1).filter((r: any) => Array.isArray(r));
+      const allRows = outline.content.slice(1).filter((r: any) => Array.isArray(r));
+      const excludeRecentCount = Math.max(0, Math.floor(Number(options?.excludeRecentCount) || 0));
+      const rows = excludeRecentCount > 0
+        ? allRows.slice(0, Math.max(0, allRows.length - excludeRecentCount))
+        : allRows;
       if (rows.length === 0) {
         out += '(无数据行)\n';
         return out;
@@ -134,7 +141,10 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine';
   }
 
   /** [剧情推进专用] $5 从纪要表本地数据读取概要和编码索引两列 */
-  export function formatSummaryIndexForPlot_ACU(allTablesJson: any) {
+  export function formatSummaryIndexForPlot_ACU(
+    allTablesJson: any,
+    options: { excludeRecentCount?: number } = {},
+  ) {
     try {
       if (!allTablesJson || typeof allTablesJson !== 'object') {
         logDebug_ACU('[剧情推进] formatSummaryIndexForPlot_ACU: 未获取到表格数据');
@@ -173,7 +183,11 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine';
       let out = `## 表格: 纪要索引\n`;
       out += `Columns: 概要, 编码索引\n`;
 
-      const rows = summaryTable.content.slice(1).filter((r: any) => Array.isArray(r));
+      const allRows = summaryTable.content.slice(1).filter((r: any) => Array.isArray(r));
+      const excludeRecentCount = Math.max(0, Math.floor(Number(options?.excludeRecentCount) || 0));
+      const rows = excludeRecentCount > 0
+        ? allRows.slice(0, Math.max(0, allRows.length - excludeRecentCount))
+        : allRows;
       if (rows.length === 0) {
         out += '(无数据行)\n';
         return { success: true, content: out };
@@ -211,7 +225,7 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine';
    */
   export function formatSummaryRowsForPlotByColumns_ACU(
     allTablesJson: any,
-    options: { columns?: string[]; filterIndexCodes?: string[] | null } = {},
+    options: { columns?: string[]; filterIndexCodes?: string[] | null; excludeRecentCount?: number } = {},
   ): { success: boolean; content: string; rowCount: number } {
     try {
       if (!allTablesJson || typeof allTablesJson !== 'object') {
@@ -247,7 +261,11 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine';
         ? new Set(options.filterIndexCodes.map(code => String(code ?? '').trim()).filter(Boolean))
         : null;
 
-      const dataRows = summaryTable.content.slice(1).filter((r: any) => Array.isArray(r));
+      const allDataRows = summaryTable.content.slice(1).filter((r: any) => Array.isArray(r));
+      const excludeRecentCount = Math.max(0, Math.floor(Number(options.excludeRecentCount) || 0));
+      const dataRows = (!filterSet && excludeRecentCount > 0)
+        ? allDataRows.slice(0, Math.max(0, allDataRows.length - excludeRecentCount))
+        : allDataRows;
       const blocks: string[] = [];
       for (const row of dataRows) {
         const indexCode = String(row[indexColIdx] ?? '').trim();
@@ -338,13 +356,71 @@ import { getIsolationPrefix_ACU } from '../../worldbook/injection-engine';
     return { totalCount: rows.length, codes, foundTable: true };
   }
 
+  /**
+   * [剧情推进专用] 从世界书 Markdown 表格格式的纪要索引文本中排除最近 N 条数据行。
+   * 若提供 excludeIndexCodes，则按编码精确剔除（幂等，避免重复排除）；否则按顺序剔除最后 N 条数据行。
+   */
+  export function excludeRecentRowsFromSummaryIndexContent_ACU(
+    content: string,
+    options: { excludeRecentCount?: number; excludeIndexCodes?: string[] } = {},
+  ): string {
+    if (typeof content !== 'string' || !content.trim()) return content;
+    const excludeRecentCount = Math.max(0, Math.floor(Number(options.excludeRecentCount) || 0));
+    const excludeCodeSet = new Set(
+      (Array.isArray(options.excludeIndexCodes) ? options.excludeIndexCodes : [])
+        .map(code => String(code ?? '').trim())
+        .filter(Boolean),
+    );
+    if (excludeRecentCount <= 0 && excludeCodeSet.size === 0) return content;
+
+    const lines = content.split(/\r?\n/);
+    const sepIdx = lines.findIndex(line => /^\s*\|(?:\s*:?-+:?\s*\|)+\s*$/.test(line));
+    if (sepIdx === -1) return content;
+
+    const dataRowIndices: number[] = [];
+    for (let i = sepIdx + 1; i < lines.length; i += 1) {
+      if (/^\s*\|.*\|\s*$/.test(lines[i])) {
+        dataRowIndices.push(i);
+      } else {
+        break;
+      }
+    }
+    if (dataRowIndices.length === 0) return content;
+
+    const dropIndices = new Set<number>();
+    if (excludeCodeSet.size > 0) {
+      for (const rowLineIdx of dataRowIndices) {
+        const cells = lines[rowLineIdx].split('|').slice(1, -1).map(cell => cell.trim());
+        if (cells.some(cell => excludeCodeSet.has(cell))) {
+          dropIndices.add(rowLineIdx);
+        }
+      }
+    } else if (excludeRecentCount > 0) {
+      const startDrop = Math.max(0, dataRowIndices.length - excludeRecentCount);
+      for (let i = startDrop; i < dataRowIndices.length; i += 1) {
+        dropIndices.add(dataRowIndices[i]);
+      }
+    }
+
+    if (dropIndices.size === 0) return content;
+    return lines.filter((_, idx) => !dropIndices.has(idx)).join('\n');
+  }
+
   /** [剧情推进专用] 为跳过 AI 调用的直出任务构建模拟响应文本 */
-  export function buildDirectRecallTaskResponse_ACU(codes: string[], task?: Record<string, any>): string {
+  export function buildDirectRecallTaskResponse_ACU(
+    codes: string[],
+    task?: Record<string, any>,
+    meta?: { totalCount?: number; excludedCount?: number },
+  ): string {
     const codeListStr = codes.length > 0 ? codes.join(', ') : '';
     const extractTags = String(task?.extractTags || 'recall');
     const tagList = extractTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
 
-    let response = `<thought>当前纪要总数(${codes.length})未超过召回阈值，执行本地全量直出召回。</thought>\n`;
+    const excludedCount = Math.max(0, Math.floor(Number(meta?.excludedCount) || 0));
+    const totalCount = meta?.totalCount !== undefined ? Number(meta.totalCount) : (codes.length + excludedCount);
+    let response = excludedCount > 0
+      ? `<thought>当前纪要总数(${totalCount})未超过召回阈值，已固定排除最新 ${excludedCount} 条，执行本地直出剩余 ${codes.length} 条编码。</thought>\n`
+      : `<thought>当前纪要总数(${codes.length})未超过召回阈值，执行本地全量直出召回。</thought>\n`;
     if (tagList.includes('recall') || tagList.length === 0) {
       response += `<recall>\n${codeListStr}\n</recall>\n`;
     }

@@ -154,7 +154,7 @@ function defaultConfig_ACU(overrides: Record<string, any> = {}): any {
     keywordGenerationMaxAttempts: 1,
     keywordApiPreset: '',
     summaryIndexKeywordMinRows: 1,
-    summaryIndexRecentFixedInjectCount: 0,
+    summaryIndexRecentFixedExcludeCount: 0,
     summaryIndexMinScore: 0.95,
     summaryIndexCandidateLimit: 10,
     summaryIndexHybridRetrievalEnabled: true,
@@ -218,7 +218,7 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
 
   it('hybrid 开启时 BM25 能补足 dense 阈值过滤掉的候选', async () => {
     h.config.summaryIndexMinScore = 0.95;
-    h.config.summaryIndexRecentFixedInjectCount = 0;
+    h.config.summaryIndexRecentFixedExcludeCount = 0;
 
     const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 'hybrid-bm25' });
 
@@ -257,22 +257,38 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     expect(createdContent_ACU()).toContain('old sparse summary');
   });
 
-  it('最近固定行不参与候选池，但最终合并进覆盖内容', async () => {
-    h.config.summaryIndexRecentFixedInjectCount = 1;
-    h.config.topK = 1;
+  it('最近固定排除行既不参与候选池，也不会被注入进覆盖内容', async () => {
+    h.config.summaryIndexRecentFixedExcludeCount = 1;
+    h.config.topK = 2;
     h.chunks = [
       h.chunks[0],
       { ...h.chunks[1], text: 'plain dense vector row', vector: [0, 1] },
-      h.chunks[2],
+      { ...h.chunks[2], text: 'secret relic exact vector match', vector: [1, 0] },
     ];
 
-    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic', source: 'recent-fixed' });
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic', source: 'recent-exclude' });
 
     expect(result.success).toBe(true);
-    expect(result.injectedCount).toBe(2);
+    expect(result.injectedCount).toBe(1);
+    expect(result.diagnostics?.recentExcludedCount).toBe(1);
     const content = createdContent_ACU();
     expect(content).toContain('old sparse summary');
-    expect(content).toContain('recent fixed summary');
+    expect(content).not.toContain('recent fixed summary');
+  });
+
+  it('当固定排除条数覆盖全部纪要行时直接跳过，不发起 embedding 请求', async () => {
+    h.config.summaryIndexRecentFixedExcludeCount = 3;
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic', source: 'all-excluded' });
+
+    expect(result).toMatchObject({
+      success: false,
+      skipped: true,
+      reason: 'all_rows_excluded',
+    });
+    expect(result.diagnostics?.recentExcludedCount).toBe(3);
+    expect(h.createEmbeddings).not.toHaveBeenCalled();
+    expect(h.createEntries).not.toHaveBeenCalled();
   });
 
   it('实时纪要表纯新增行时同样判定索引过期，不使用缺行的旧索引', async () => {
@@ -345,25 +361,8 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
   });
 
 
-  it('T5：createEmbeddings 抛异常但有最近固定行时，降级为仅注入固定行，不中断生成', async () => {
-    h.config.summaryIndexRecentFixedInjectCount = 1;
-    h.createEmbeddings.mockRejectedValueOnce(new Error('Embedding 请求失败 403: insufficient balance'));
-
-    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 't5-degrade' });
-
-    expect(result.success).toBe(true);
-    expect(result.reason).toBe('query_embedding_failed_recent_fixed_only');
-    expect(result.injectedCount).toBe(1);
-    expect(result.keywordCount).toBe(0);
-    // 固定行（rowOrder 3 = recent fixed summary）被注入，向量候选为 0。
-    const content = createdContent_ACU();
-    expect(content).toContain('recent fixed summary');
-    expect(content).not.toContain('old sparse summary');
-    expect(content).not.toContain('dense summary');
-  });
-
-  it('T5：createEmbeddings 抛异常且无最近固定行时，异常穿透（由上层 init.ts try/catch 兜底）', async () => {
-    h.config.summaryIndexRecentFixedInjectCount = 0;
+  it('T5：createEmbeddings 抛异常时异常穿透（由上层 init.ts try/catch 兜底），不回退注入近期排除行', async () => {
+    h.config.summaryIndexRecentFixedExcludeCount = 1;
     h.createEmbeddings.mockRejectedValueOnce(new Error('Embedding 请求失败 500: boom'));
 
     await expect(processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 't5-rethrow' }))
@@ -371,16 +370,17 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     expect(h.createEntries).not.toHaveBeenCalled();
   });
 
-  it('T5：createEmbeddings 返回空向量但有最近固定行时，同样降级注入固定行', async () => {
-    h.config.summaryIndexRecentFixedInjectCount = 1;
+  it('T5：createEmbeddings 返回空向量时返回 empty_query_embedding，不回退注入近期排除行', async () => {
+    h.config.summaryIndexRecentFixedExcludeCount = 1;
     h.createEmbeddings.mockResolvedValueOnce([{ index: 0, embedding: [] }]);
 
     const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 't5-empty-vector' });
 
-    expect(result.success).toBe(true);
-    expect(result.reason).toBe('query_embedding_failed_recent_fixed_only');
-    const content = createdContent_ACU();
-    expect(content).toContain('recent fixed summary');
+    expect(result.success).toBe(false);
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe('empty_query_embedding');
+    expect(result.diagnostics?.recentExcludedCount).toBe(1);
+    expect(h.createEntries).not.toHaveBeenCalled();
   });
 
 });
@@ -680,7 +680,7 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
       keywordGenerationEnabled: false,
       queryStripTags: '标签触发',
       queryTailCharLimit: 32,
-      summaryIndexRecentFixedInjectCount: 0,
+      summaryIndexRecentFixedExcludeCount: 0,
     });
 
     const result = await processSummaryVectorIndexBeforeGeneration_ACU({
@@ -706,7 +706,7 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
     expect(tail).toBe('赫敏手指抓着挎包带子，看着窗外空荡荡的草坪，从包里摸出一张便签纸递过来。');
   });
 
-  it('summaryIndexSharedTotalLimit 约束「最近固定 + 向量召回」总数并写入运行时初筛缓存', async () => {
+  it('summaryIndexSharedTotalLimit 约束向量召回总数，且固定排除的近期行既不占位也不注入', async () => {
     const r1 = row_ACU('r1', 1, 'summary 1');
     const r2 = row_ACU('r2', 2, 'summary 2');
     const r3 = row_ACU('r3', 3, 'summary 3');
@@ -717,16 +717,16 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
       chunk_ACU(r1, 'match alpha', [1, 0]),
       chunk_ACU(r2, 'match beta', [1, 0]),
       chunk_ACU(r3, 'match gamma', [1, 0]),
-      chunk_ACU(r4, 'recent 4', [0, 1]),
-      chunk_ACU(r5, 'recent 5', [0, 1]),
+      chunk_ACU(r4, 'match recent 4', [1, 0]),
+      chunk_ACU(r5, 'match recent 5', [1, 0]),
     ];
     h.config = defaultConfig_ACU({
       keywordGenerationEnabled: false,
       summaryIndexKeywordMinRows: 1,
-      summaryIndexRecentFixedInjectCount: 2,
+      summaryIndexRecentFixedExcludeCount: 2,
       topK: 10,
       recallCandidateLimit: 10,
-      summaryIndexSharedTotalLimit: 3,
+      summaryIndexSharedTotalLimit: 2,
       summaryIndexMinScore: 0,
     });
 
@@ -736,10 +736,11 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
     });
 
     expect(result.success).toBe(true);
-    expect(result.injectedCount).toBe(3);
-    expect(result.selectedIndexCodes).toHaveLength(3);
-    expect(result.selectedIndexCodes).toContain('IDX-4');
-    expect(result.selectedIndexCodes).toContain('IDX-5');
+    expect(result.injectedCount).toBe(2);
+    expect(result.diagnostics?.recentExcludedCount).toBe(2);
+    expect(result.selectedIndexCodes).toHaveLength(2);
+    expect(result.selectedIndexCodes).not.toContain('IDX-4');
+    expect(result.selectedIndexCodes).not.toContain('IDX-5');
     const snapshot = getLatestSummaryVectorRecallSnapshot_ACU();
     expect(snapshot?.indexCodes).toEqual(result.selectedIndexCodes);
   });
@@ -756,7 +757,7 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
       keywordGenerationEnabled: true,
       keywordPromptGroup: [{ role: 'user', content: '$RECENT_CONTEXT\n$USER_INPUT' }],
       queryStripTags: '标签触发',
-      summaryIndexRecentFixedInjectCount: 0,
+      summaryIndexRecentFixedExcludeCount: 0,
     });
 
     const result = await processSummaryVectorIndexBeforeGeneration_ACU({
@@ -802,7 +803,7 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
     h.config = defaultConfig_ACU({
       keywordGenerationEnabled: false,
       summaryIndexKeywordMinRows: 1,
-      summaryIndexRecentFixedInjectCount: 1,
+      summaryIndexRecentFixedExcludeCount: 1,
       topK: 1,
       recallCandidateLimit: 5,
       summaryIndexSharedTotalLimit: 2,
@@ -815,9 +816,9 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
     });
 
     expect(result.success).toBe(true);
-    expect(result.selectedIndexCodes).toEqual(['IDX-1', 'IDX-3']);
+    expect(result.selectedIndexCodes).toEqual(['IDX-1']);
     const matched = getLatestSummaryVectorRecallSnapshot_ACU('my-chat', '');
-    expect(matched?.indexCodes).toEqual(['IDX-1', 'IDX-3']);
+    expect(matched?.indexCodes).toEqual(['IDX-1']);
     expect(getLatestSummaryVectorRecallSnapshot_ACU('other-chat', '')).toBeNull();
     expect(getLatestSummaryVectorRecallSnapshot_ACU('my-chat', 'iso-other')).toBeNull();
   });
@@ -838,7 +839,7 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
       queryStripTags: '标签触发',
       queryTailCharLimit: 100,
       summaryIndexKeywordMinRows: 1,
-      summaryIndexRecentFixedInjectCount: 1,
+      summaryIndexRecentFixedExcludeCount: 1,
       topK: 1,
       recallCandidateLimit: 5,
       summaryIndexSharedTotalLimit: 2,
@@ -852,10 +853,12 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
     expect(h.setEntries).not.toHaveBeenCalled();
     expect(getLatestSummaryVectorRecallSnapshot_ACU()).toBeNull();
     expect(result.diagnostics?.dryRun).toBe(true);
+    expect(result.diagnostics?.recentExcludedCount).toBe(1);
     expect(result.diagnostics?.queryText).toContain('去查密室线索');
     expect(result.diagnostics?.queryText).toContain('灵灵提醒我们去查密室线索。');
     expect(result.diagnostics?.queryText).not.toContain('探索·分支');
-    const rankedDiag = result.diagnostics?.items.find((item) => item.kind === 'ranked');
+    expect(result.diagnostics?.items).toHaveLength(1);
+    const rankedDiag = result.diagnostics?.items[0];
     expect(rankedDiag?.indexCode).toBe('IDX-1');
     expect(rankedDiag?.matchedChunkText).toContain('古堡地窖发现旧日记本');
     expect(rankedDiag?.denseScore).toBe(1);

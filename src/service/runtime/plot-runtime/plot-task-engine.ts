@@ -19,7 +19,8 @@ import { ensurePlotTasksCompat_ACU, getPlotPromptContentByIdFromSettings_ACU, no
 import { parseRandomTags_ACU, replaceRandomVariables_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from '../template-vars';
 import { applyContextTagFilters_ACU, applyExcludeRulesToText_ACU } from '../helpers-context-tags';
 import { mergeAllIndependentTables_ACU } from '../helpers-data-merge';
-import { formatTableDataForLLM_ACU, formatOutlineTableForPlot_ACU, formatSummaryIndexForPlot_ACU, formatSummaryRowsForPlotByColumns_ACU, getSummaryIndexContentForPlot_ACU, extractAllAmCodesFromSummaryTable_ACU, buildDirectRecallTaskResponse_ACU } from './plot-data-format';
+import { formatTableDataForLLM_ACU, formatOutlineTableForPlot_ACU, formatSummaryIndexForPlot_ACU, formatSummaryRowsForPlotByColumns_ACU, getSummaryIndexContentForPlot_ACU, excludeRecentRowsFromSummaryIndexContent_ACU, extractAllAmCodesFromSummaryTable_ACU, buildDirectRecallTaskResponse_ACU } from './plot-data-format';
+import { globalMeta_ACU } from '../../../data/repositories/profile-repo';
 import { getCurrentVectorMemoryConfig_ACU } from '../../vector/vector-memory-config';
 import { getLatestSummaryVectorRecallSnapshot_ACU } from '../../vector/summary-vector-recall-cache';
 import { getNormalizedPlotMessageRole_ACU, tryRenderPlotTemplateWithEjs_ACU, renderPlotTaskContentWithIsolatedVariables_ACU, extractPlotTagsFromResponse_ACU, getPlotPlaceholderTagNames_ACU, buildPlotTagMapFromText_ACU, replacePlotTagPlaceholders_ACU, buildTaskWorldbookTriggerText_ACU, sortPlotTaskResults_ACU, aggregatePlotTaskTags_ACU, buildPlotSaveContentFromTaskResults_ACU, buildFinalPlotInjectionMessage_ACU } from './plot-tag-utils';
@@ -206,6 +207,7 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
     logDebug_ACU('[剧情推进] $1 世界书内容: 延迟到任务级计算');
 
     let outlineTableContent = '';
+    let effectiveRecentExcludeCount = 0;
     try {
       if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object') {
         try {
@@ -222,17 +224,38 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
         : [];
       const isolationKey = settings_ACU?.dataIsolationEnabled ? String(settings_ACU?.dataIsolationCode || '') : '';
       const recallSnapshot = getLatestSummaryVectorRecallSnapshot_ACU(currentChatFileIdentifier_ACU || undefined, isolationKey);
+      const isCrossfireModeEnabled =
+        globalMeta_ACU?.summaryVectorIndexModeGlobal === true
+        || settings_ACU?.summaryVectorIndexModeDefault === true;
+      const rawRecentExcludeCount = Math.max(0, Math.floor(Number((vectorConfig as any)?.recentFixedExcludeCount) || 0));
+      effectiveRecentExcludeCount = isCrossfireModeEnabled ? rawRecentExcludeCount : 0;
+      // 交火模式已启用但未触发向量召回（无 recallSnapshot，常见于纪要条数未达向量触发阈值）时，
+      // 传给推进 AI 的 $5 纪要同样排除最新 N 条，避免与近期正文重复或误导。
+      const plotExcludeRecentCount = (!recallSnapshot && effectiveRecentExcludeCount > 0)
+        ? effectiveRecentExcludeCount
+        : 0;
+      const plotExcludeRecentCodes = (plotExcludeRecentCount > 0 && currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object')
+        ? (() => {
+            const summaryInfo = extractAllAmCodesFromSummaryTable_ACU(currentJsonTableData_ACU);
+            return summaryInfo.codes.length > 0
+              ? summaryInfo.codes.slice(-plotExcludeRecentCount)
+              : [];
+          })()
+        : [];
 
       if (customPlotColumns.length > 0 && currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object') {
         const projected = formatSummaryRowsForPlotByColumns_ACU(currentJsonTableData_ACU, {
           columns: customPlotColumns,
           filterIndexCodes: recallSnapshot ? recallSnapshot.indexCodes : null,
+          excludeRecentCount: plotExcludeRecentCount,
         });
         if (projected.success) {
           outlineTableContent = projected.content;
           logDebug_ACU(
             `[剧情推进] $5 使用自定义投影列(${customPlotColumns.join('、')})，行数=${projected.rowCount}`
-            + (recallSnapshot ? `（经交火初筛 ${recallSnapshot.indexCodes.length} 个编码）` : ''),
+            + (recallSnapshot
+              ? `（经交火初筛 ${recallSnapshot.indexCodes.length} 个编码）`
+              : (plotExcludeRecentCount > 0 ? `（未触发向量召回，已固定排除最新 ${plotExcludeRecentCount} 条）` : '')),
           );
         }
       }
@@ -240,16 +263,31 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
       if (!outlineTableContent) {
         const summaryIndexWorldbookContent = await getSummaryIndexContentForPlot_ACU(plotSettings);
         if (typeof summaryIndexWorldbookContent === 'string' && summaryIndexWorldbookContent.trim()) {
-          outlineTableContent = summaryIndexWorldbookContent;
-          logDebug_ACU('[剧情推进] $5 使用世界书纪要索引条目内容');
+          outlineTableContent = plotExcludeRecentCount > 0
+            ? excludeRecentRowsFromSummaryIndexContent_ACU(summaryIndexWorldbookContent, {
+                excludeRecentCount: plotExcludeRecentCount,
+                excludeIndexCodes: plotExcludeRecentCodes,
+              })
+            : summaryIndexWorldbookContent;
+          logDebug_ACU(
+            '[剧情推进] $5 使用世界书纪要索引条目内容'
+            + (plotExcludeRecentCount > 0 ? `（未触发向量召回，已固定排除最新 ${plotExcludeRecentCount} 条）` : ''),
+          );
         } else if (currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object') {
-          const summaryIndexResult = formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU);
+          const summaryIndexResult = plotExcludeRecentCount > 0
+            ? formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: plotExcludeRecentCount })
+            : formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU);
           if (summaryIndexResult.success) {
             outlineTableContent = summaryIndexResult.content;
-            logDebug_ACU('[剧情推进] $5 未找到世界书纪要索引条目，使用纪要表的概要和编码索引列');
+            logDebug_ACU(
+              '[剧情推进] $5 未找到世界书纪要索引条目，使用纪要表的概要和编码索引列'
+              + (plotExcludeRecentCount > 0 ? `（已固定排除最新 ${plotExcludeRecentCount} 条）` : ''),
+            );
           } else {
             logDebug_ACU('[剧情推进] $5 纪要表读取失败，回退使用总体大纲表。原因:', summaryIndexResult.content);
-            outlineTableContent = formatOutlineTableForPlot_ACU(currentJsonTableData_ACU);
+            outlineTableContent = plotExcludeRecentCount > 0
+              ? formatOutlineTableForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: plotExcludeRecentCount })
+              : formatOutlineTableForPlot_ACU(currentJsonTableData_ACU);
             logDebug_ACU('[剧情推进] $5 回退使用总体大纲表内容');
           }
         } else {
@@ -461,6 +499,7 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
       seedContentForConditional,
       recentContextMessages: Array.isArray(agentContextMessages) ? agentContextMessages : [],
       allTablesJson: currentJsonTableData_ACU,
+      recentFixedExcludeCount: effectiveRecentExcludeCount,
     };
   }
 
@@ -541,8 +580,21 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
       const summaryInfo = extractAllAmCodesFromSummaryTable_ACU(sharedContext.allTablesJson);
       const recallCount = normalizePositiveInteger_ACU(sharedContext?.plotSettings?.recallCount, 20);
       if (summaryInfo.totalCount <= recallCount) {
-        logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 当前纪要条数(${summaryInfo.totalCount}) <= zhaohui(${recallCount})，命中本地直出规则，跳过 AI 请求。`);
-        const rawResponse = buildDirectRecallTaskResponse_ACU(summaryInfo.codes, normalizedTask);
+        const recentExcludeCount = Math.max(0, Math.floor(Number(sharedContext.recentFixedExcludeCount) || 0));
+        const excludedCount = Math.min(recentExcludeCount, summaryInfo.codes.length);
+        const directCodes = excludedCount > 0
+          ? summaryInfo.codes.slice(0, Math.max(0, summaryInfo.codes.length - excludedCount))
+          : summaryInfo.codes;
+        logDebug_ACU(
+          `[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 当前纪要条数(${summaryInfo.totalCount}) <= zhaohui(${recallCount})，命中本地直出规则，跳过 AI 请求`
+          + (excludedCount > 0 ? `（已固定排除最新 ${excludedCount} 条，输出剩余 ${directCodes.length} 条编码）。` : '。'),
+        );
+        const rawResponse = excludedCount > 0
+          ? buildDirectRecallTaskResponse_ACU(directCodes, normalizedTask, {
+              totalCount: summaryInfo.totalCount,
+              excludedCount,
+            })
+          : buildDirectRecallTaskResponse_ACU(directCodes, normalizedTask);
         const { tagNames, extractedTags, injectedFragments, injectOnlyTags, injectOnlyFragments, injectOnlyTagNames } = extractPlotTagsFromResponse_ACU(
           rawResponse,
           normalizedTask.extractTags,

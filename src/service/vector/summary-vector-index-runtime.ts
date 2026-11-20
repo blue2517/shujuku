@@ -83,20 +83,17 @@ interface RankedSummaryCandidate_ACU extends SummaryHybridCandidate_ACU {
     rerankScore?: number;
 }
 
-// T12：recent-fixed 注入项与排序候选的判别联合。recent_fixed 项不携带 chunk（无向量，
-// 不参与 rerank / 排序），只提供 row 用于覆盖内容输出；ranked 项来自 dense/sparse/fusion。
-type SummaryIndexSelectedCandidate_ACU =
-    | { kind: 'recent_fixed'; row: ChatSummaryVectorIndexRow_ACU }
-    | {
-        kind: 'ranked';
-        chunk: ChatSummaryVectorIndexChunk_ACU;
-        row: ChatSummaryVectorIndexRow_ACU;
-        score: number;
-        denseScore?: number;
-        bm25Score?: number;
-        rrfScore?: number;
-        rerankScore?: number;
-    };
+// 排序命中的纪要候选（来自 dense/sparse/fusion 与可选 rerank）。
+type SummaryIndexSelectedCandidate_ACU = {
+    kind: 'ranked';
+    chunk: ChatSummaryVectorIndexChunk_ACU;
+    row: ChatSummaryVectorIndexRow_ACU;
+    score: number;
+    denseScore?: number;
+    bm25Score?: number;
+    rrfScore?: number;
+    rerankScore?: number;
+};
 
 let lastRuntimeSignature_ACU = '';
 let lastRuntimeAt_ACU = 0;
@@ -715,14 +712,6 @@ function buildDiagnosticItems_ACU(selected: SummaryIndexSelectedCandidate_ACU[])
     return selected.map((item) => {
         const summarySource = normalizeText_ACU(item.row.summary || item.row.vectorSourceText || '');
         const summaryPreview = summarySource.length > 90 ? `${summarySource.slice(0, 90)}…` : summarySource;
-        if (item.kind === 'recent_fixed') {
-            return {
-                indexCode: String(item.row.indexCode || ''),
-                rowKey: String(item.row.rowKey || ''),
-                kind: 'recent_fixed',
-                summaryPreview,
-            };
-        }
         const chunkText = normalizeText_ACU(item.chunk?.text || '');
         return {
             indexCode: String(item.row.indexCode || ''),
@@ -737,66 +726,6 @@ function buildDiagnosticItems_ACU(selected: SummaryIndexSelectedCandidate_ACU[])
             score: item.score,
         };
     });
-}
-
-// T5：query embedding 失败时的降级路径 —— 仅注入最近固定行，不依赖向量检索。
-// 仅在 recentFixedRows 非空时调用；调用方负责确认 recentFixedRows.length > 0。
-async function injectRecentFixedRowsOnly_ACU(
-    recentFixedRows: ChatSummaryVectorIndexRow_ACU[],
-    scopeMeta: { chatKey?: string; isolationKey?: string } = {},
-    options: { dryRun?: boolean; source?: string; userInput?: string; queryMode?: 'keyword_ai' | 'direct'; queryText?: string; keywords?: string[]; startedAt?: number } = {},
-): Promise<SummaryVectorIndexRuntimeResult_ACU> {
-    const selected = recentFixedRows
-        .map((row): SummaryIndexSelectedCandidate_ACU => ({ kind: 'recent_fixed', row }))
-        .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
-    const selectedIndexCodes = selected.map((item) => item.row.indexCode).filter(Boolean);
-    if (!options.dryRun) {
-        const content = buildSummaryIndexOverwriteContent_ACU(selected);
-        await upsertOriginalSummaryIndexEntry_ACU(content);
-        setLatestSummaryVectorRecallSnapshot_ACU({
-            chatKey: String(scopeMeta.chatKey || ''),
-            isolationKey: String(scopeMeta.isolationKey || ''),
-            indexCodes: selectedIndexCodes,
-            rowKeys: selected.map((item) => item.row.rowKey).filter(Boolean),
-            updatedAt: Date.now(),
-        });
-    }
-    const diagnostics: SummaryVectorRecallDiagnostics_ACU = {
-        chatKey: String(scopeMeta.chatKey || ''),
-        isolationKey: String(scopeMeta.isolationKey || ''),
-        source: String(options.source || 'unknown'),
-        dryRun: options.dryRun === true,
-        success: true,
-        skipped: false,
-        reason: 'query_embedding_failed_recent_fixed_only',
-        userInput: String(options.userInput || ''),
-        queryMode: options.queryMode || 'direct',
-        queryText: String(options.queryText || ''),
-        keywords: Array.isArray(options.keywords) ? [...options.keywords] : [],
-        denseCandidateCount: 0,
-        sparseCandidateCount: 0,
-        fusionCandidateCount: 0,
-        rerankStatus: 'skipped',
-        recentFixedCount: selected.length,
-        rankedCount: 0,
-        totalSelectedCount: selected.length,
-        durationMs: Math.max(0, Date.now() - (options.startedAt || Date.now())),
-        updatedAt: Date.now(),
-        items: buildDiagnosticItems_ACU(selected),
-    };
-    setLatestSummaryVectorRecallDiagnostics_ACU(diagnostics);
-    return {
-        success: true,
-        reason: 'query_embedding_failed_recent_fixed_only',
-        keywordCount: 0,
-        candidateCount: 0,
-        injectedCount: selected.length,
-        selectedIndexCodes,
-        denseCandidateCount: 0,
-        sparseCandidateCount: 0,
-        fusionCandidateCount: 0,
-        diagnostics,
-    };
 }
 
 
@@ -847,7 +776,7 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
             fusionCandidateCount: partialResult.fusionCandidateCount ?? 0,
             rerankStatus: diagPartial.rerankStatus || 'skipped',
             rerankError: diagPartial.rerankError,
-            recentFixedCount: diagPartial.recentFixedCount ?? 0,
+            recentExcludedCount: diagPartial.recentExcludedCount ?? 0,
             rankedCount: diagPartial.rankedCount ?? 0,
             totalSelectedCount: partialResult.injectedCount ?? 0,
             durationMs: Math.max(0, Date.now() - startedAt),
@@ -983,80 +912,54 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         isolationKey: normalizeSummaryVectorIsolationKey_ACU(latestLayer?.isolationKey ?? state.manifest?.isolationKey),
     };
 
-    // ── 最近 X 条固定注入 + 共享总上限配额 ──
+    // ── 固定排除最近 X 条（近期正文已在上下文中，不参与检索也不注入） + 召回总上限配额 ──
     const sharedTotalLimit = Math.max(0, Math.floor(Number(config.summaryIndexSharedTotalLimit) || 0));
-    const rawRecentFixedLimit = Math.max(0, config.summaryIndexRecentFixedInjectCount || 0);
-    const effectiveRecentFixedLimit = sharedTotalLimit > 0
-        ? Math.min(rawRecentFixedLimit, sharedTotalLimit)
-        : rawRecentFixedLimit;
-    const recentFixedCount = Math.min(effectiveRecentFixedLimit, rows.length);
+    const rawRecentExcludeCount = Math.max(0, Math.floor(Number(config.summaryIndexRecentFixedExcludeCount) || 0));
+    const recentExcludedCount = Math.min(rawRecentExcludeCount, rows.length);
     const rowsSortedByOrderDesc = [...rows].sort(
         (left, right) => (Number(right.rowOrder) || 0) - (Number(left.rowOrder) || 0),
     );
-    const recentFixedRows = rowsSortedByOrderDesc.slice(0, recentFixedCount);
-    const recentFixedRowKeys = new Set(recentFixedRows.map((row) => row.rowKey));
+    const recentExcludedRows = rowsSortedByOrderDesc.slice(0, recentExcludedCount);
+    const recentExcludedRowKeys = new Set(recentExcludedRows.map((row) => row.rowKey));
     const effectiveVectorTopK = sharedTotalLimit > 0
-        ? Math.min(config.topK, Math.max(0, sharedTotalLimit - recentFixedRows.length))
+        ? Math.min(config.topK, sharedTotalLimit)
         : config.topK;
-    // 较早的行（不参与排序的候选池）
-    const olderRows = rows.filter((row) => !recentFixedRowKeys.has(row.rowKey));
+    // 较早的历史行（排除最近 N 条后的候选池）
+    const olderRows = rows.filter((row) => !recentExcludedRowKeys.has(row.rowKey));
+    if (olderRows.length === 0) {
+        if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
+        return recordAndReturn(
+            { success: false, skipped: true, reason: 'all_rows_excluded' },
+            { ...recallScopeMeta, recentExcludedCount: recentExcludedRows.length },
+        );
+    }
 
-    // T5：query embedding 失败不中断宿主生成。generateKeywords/createEmbeddings 抛异常或返回空向量时，
-    // 若存在最近固定行（recentFixedRows），降级为仅注入固定行（不依赖向量），继续原始生成；
-    // 否则保持原行为（空向量返回 empty_query_embedding；异常穿透给上层 init.ts 的 try/catch 兜底）。
+    // query embedding 失败时保持异常穿透给上层兜底；空向量返回 empty_query_embedding。
     let keywords: string[] = [];
     let queryText = '';
     let queryVector: number[] = [];
-    try {
-        if (config.keywordGenerationEnabled === false) {
-            queryText = buildDirectQueryText_ACU(config, userInput);
-        } else {
-            keywords = await generateKeywords_ACU(config, userInput);
-            queryText = [userInput, keywords.join('，')].filter(Boolean).join('\n关键词：');
-        }
-        const embeddings = await createEmbeddings_ACU({
-            endpoint: config.embeddingEndpoint,
-            apiKey: config.embeddingApiKey,
-            model: config.embeddingModel,
-            input: [queryText],
-        });
-        queryVector = embeddings[0]?.embedding || [];
-        if (queryVector.length === 0) {
-            if (recentFixedRows.length > 0) {
-                logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，降级为仅注入最近固定行:', userInput);
-                return await injectRecentFixedRowsOnly_ACU(recentFixedRows, recallScopeMeta, {
-                    dryRun,
-                    source,
-                    userInput,
-                    queryMode,
-                    queryText,
-                    keywords,
-                    startedAt,
-                });
-            }
-            if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
-            return recordAndReturn(
-                { success: false, skipped: true, reason: 'empty_query_embedding' },
-                { ...recallScopeMeta, queryText, keywords },
-            );
-        }
-    } catch (error) {
-        if (recentFixedRows.length > 0) {
-            logWarn_ACU('[交火模式纪要索引] query embedding 失败，降级为仅注入最近固定行，继续原始生成:', error);
-            return await injectRecentFixedRowsOnly_ACU(recentFixedRows, recallScopeMeta, {
-                dryRun,
-                source,
-                userInput,
-                queryMode,
-                queryText,
-                keywords,
-                startedAt,
-            });
-        }
-        throw error;
+    if (config.keywordGenerationEnabled === false) {
+        queryText = buildDirectQueryText_ACU(config, userInput);
+    } else {
+        keywords = await generateKeywords_ACU(config, userInput);
+        queryText = [userInput, keywords.join('，')].filter(Boolean).join('\n关键词：');
+    }
+    const embeddings = await createEmbeddings_ACU({
+        endpoint: config.embeddingEndpoint,
+        apiKey: config.embeddingApiKey,
+        model: config.embeddingModel,
+        input: [queryText],
+    });
+    queryVector = embeddings[0]?.embedding || [];
+    if (queryVector.length === 0) {
+        if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
+        return recordAndReturn(
+            { success: false, skipped: true, reason: 'empty_query_embedding' },
+            { ...recallScopeMeta, queryText, keywords, recentExcludedCount: recentExcludedRows.length },
+        );
     }
 
-    // 只对较早行的 chunks 做向量匹配
+    // 只对排除近期后的较早历史行 chunks 做向量匹配
     const olderRowKeys = new Set(olderRows.map((row) => row.rowKey));
     const olderChunks = chunks.filter((chunk) => olderRowKeys.has(chunk.rowKey));
 
@@ -1083,7 +986,7 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         .slice(0, config.summaryIndexCandidateLimit);
 
     // T10：BM25 语料缓存键。候选集（searchableCandidates）的 chunk 集合指纹保证
-    // recentFixedCount / config 变化导致候选集变化时缓存自然失效；V2 快照的
+    // recentExcludedCount / config 变化导致候选集变化时缓存自然失效；V2 快照的
     // writeGeneration 唯一标识一次归档内容（不可变身份），作为前缀避免跨快照误用。
     const bm25CacheKey = `${state.manifest?.storageIdentity?.writeGeneration || 'legacy'}::${state.manifest?.indexId || ''}::${searchableCandidates
         .map((candidate) => candidate.chunk.textHash || candidate.chunk.chunkId || candidate.chunk.text)
@@ -1098,18 +1001,18 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         : denseCandidates;
 
     logDebug_ACU(
-        `[交火模式纪要索引] 混合召回候选：dense=${denseCandidates.length}, bm25=${sparseCandidates.length}, fusion=${candidates.length}, hybrid=${config.summaryIndexHybridRetrievalEnabled === true}`,
+        `[交火模式纪要索引] 混合召回候选：excludedRecent=${recentExcludedRows.length}, dense=${denseCandidates.length}, bm25=${sparseCandidates.length}, fusion=${candidates.length}, hybrid=${config.summaryIndexHybridRetrievalEnabled === true}`,
     );
 
-    if (candidates.length === 0 && recentFixedRows.length === 0) {
+    if (candidates.length === 0) {
         if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
         return recordAndReturn(
             { success: false, skipped: true, reason: 'no_candidates', keywordCount: keywords.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length },
-            { ...recallScopeMeta, queryText, keywords },
+            { ...recallScopeMeta, queryText, keywords, recentExcludedCount: recentExcludedRows.length },
         );
     }
 
-    // Rerank 只处理较早行的候选
+    // Rerank 只处理排除近期后的较早历史行候选
     const rerankResult = (candidates.length > 0 && effectiveVectorTopK > 0)
         ? await rerankCandidates_ACU(config, queryText, candidates)
         : { candidates: [] as RankedSummaryCandidate_ACU[], status: 'skipped' as const };
@@ -1131,19 +1034,13 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         }
     }
 
-    // 合并：最近固定行 + TopK 排序行（去重，固定行优先）
-    for (const row of recentFixedRows) {
-        if (!selectedByRow.has(row.rowKey)) {
-            selectedByRow.set(row.rowKey, { kind: 'recent_fixed', row });
-        }
-    }
     const selected = Array.from(selectedByRow.values())
         .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
     if (selected.length === 0) {
         if (!dryRun) clearLatestSummaryVectorRecallSnapshot_ACU();
         return recordAndReturn(
             { success: false, skipped: true, reason: 'no_selected_rows', keywordCount: keywords.length, candidateCount: candidates.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length },
-            { ...recallScopeMeta, queryText, keywords, rerankStatus: rerankResult.status, rerankError: rerankResult.error },
+            { ...recallScopeMeta, queryText, keywords, rerankStatus: rerankResult.status, rerankError: rerankResult.error, recentExcludedCount: recentExcludedRows.length },
         );
     }
 
@@ -1159,7 +1056,7 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
             updatedAt: Date.now(),
         });
         logDebug_ACU(
-            `[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`,
+            `[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（已固定排除最新 ${recentExcludedRows.length} 条，排序选取 ${selected.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`,
         );
     }
     return recordAndReturn(
@@ -1170,8 +1067,8 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
             keywords,
             rerankStatus: rerankResult.status,
             rerankError: rerankResult.error,
-            recentFixedCount: recentFixedRows.length,
-            rankedCount: selected.length - recentFixedRows.length,
+            recentExcludedCount: recentExcludedRows.length,
+            rankedCount: selected.length,
             items: buildDiagnosticItems_ACU(selected),
         },
     );

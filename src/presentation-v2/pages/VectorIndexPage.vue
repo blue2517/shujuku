@@ -54,8 +54,8 @@
 
             <div class="acu-v2-vector-index-page__number-grid">
               <AcuFormRow
-                label="共享总上限（固定 + 召回合计）"
-                hint="例如填 40：表示「最近固定条数 + 向量召回条数」加起来最多 40 条（固定优先占位，剩余给向量）；填 0 表示不限制总和。"
+                label="共享总上限（召回注入上限）"
+                hint="例如填 40：表示每次向量召回注入最多不超过 40 条（取 TopK 与该上限的较小值）；填 0 表示不额外限制。"
               >
                 <AcuInput
                   :model-value="vector.form.summaryIndexSharedTotalLimit"
@@ -79,21 +79,21 @@
                   />
                 </AcuFormRow>
                 <AcuFormRow
-                  label="固定保留最新条数"
-                  hint="最新 N 条纪要必带（如设 5）；若总上限为 40，固定占 5 个名额，剩下 35 个名额给向量召回。"
+                  label="固定排除最新条数"
+                  hint="最新 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
                 >
                   <AcuInput
-                    :model-value="vector.form.recentFixedInjectCount"
+                    :model-value="vector.form.recentFixedExcludeCount"
                     type="number"
-                    :min="1"
+                    :min="0"
                     :step="1"
-                    @update:model-value="vector.previewRecentFixedInjectCount($event)"
-                    @change="vector.setNumberField('recentFixedInjectCount', $event)"
+                    @update:model-value="vector.previewRecentFixedExcludeCount($event)"
+                    @change="vector.setNonNegativeNumberField('recentFixedExcludeCount', $event)"
                   />
                 </AcuFormRow>
                 <AcuFormRow
                   label="向量最多召回条数（TopK）"
-                  hint="从更早历史里最多捞几条（受共享总上限扣减约束）。"
+                  hint="从排除近期后的更早历史里最多捞几条（若设了共享总上限，则不超过总上限）。"
                 >
                   <AcuInput
                     :model-value="vector.form.topK"
@@ -431,7 +431,7 @@
           </AcuFormRow>
           <AcuFormRow
             label="TopK（最多召回较早历史条数）"
-            hint="从更早历史里经向量与重排后最多捞回几条；若上方「共享总上限」大于 0（如 40），会自动减去固定条数。"
+            hint="从排除近期后的更早历史里经向量与重排后最多捞回几条；若上方「共享总上限」大于 0（如 40），最终条数不超过该上限。"
           >
             <AcuInput
               :model-value="vector.form.topK"
@@ -467,16 +467,16 @@
             />
           </AcuFormRow>
           <AcuFormRow
-            label="固定写入（保留最新 N 条）"
-            hint="最新的 N 条纪要无论如何都会固定保留（比如 5）；若上方设了共享总上限 40，固定先占 N 个名额。"
+            label="固定排除（排除最新 N 条）"
+            hint="最新的 N 条纪要不参与检索也不注入（近期的正文已在上下文里，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
           >
             <AcuInput
-              :model-value="vector.form.recentFixedInjectCount"
+              :model-value="vector.form.recentFixedExcludeCount"
               type="number"
-              :min="1"
+              :min="0"
               :step="1"
-              @update:model-value="vector.previewRecentFixedInjectCount($event)"
-              @change="vector.setNumberField('recentFixedInjectCount', $event)"
+              @update:model-value="vector.previewRecentFixedExcludeCount($event)"
+              @change="vector.setNonNegativeNumberField('recentFixedExcludeCount', $event)"
             />
           </AcuFormRow>
           <AcuFormRow
@@ -623,7 +623,7 @@
           </span>
           <span>
             <strong>候选漏斗：</strong>
-            向量 {{ diagData.denseCandidateCount }} / BM25 {{ diagData.sparseCandidateCount }} / 融合进重排 {{ diagData.fusionCandidateCount }} → 注入 {{ diagData.totalSelectedCount }}（固定 {{ diagData.recentFixedCount }} + 召回 {{ diagData.rankedCount }}）
+            固定排除近期 {{ diagData.recentExcludedCount }} 条 → 向量 {{ diagData.denseCandidateCount }} / BM25 {{ diagData.sparseCandidateCount }} / 融合进重排 {{ diagData.fusionCandidateCount }} → 召回注入 {{ diagData.totalSelectedCount }} 条
           </span>
         </div>
 
@@ -650,9 +650,9 @@
               class="acu-v2-vector-diag__item"
             >
               <div class="acu-v2-vector-diag__item-head">
-                <AcuBadge :variant="item.kind === 'ranked' ? 'accent' : 'neutral'">{{ item.indexCode }}</AcuBadge>
-                <span class="acu-v2-vector-diag__kind">{{ item.kind === "ranked" ? "向量/重排命中" : "最近固定保留" }}</span>
-                <span v-if="item.kind === 'ranked'" class="acu-v2-vector-diag__scores">
+                <AcuBadge variant="accent">{{ item.indexCode }}</AcuBadge>
+                <span class="acu-v2-vector-diag__kind">向量/重排命中</span>
+                <span class="acu-v2-vector-diag__scores">
                   <template v-if="item.rerankScore !== undefined">Rerank {{ formatDiagScore(item.rerankScore) }} · </template>
                   <template v-if="item.denseScore !== undefined">Embedding {{ formatDiagScore(item.denseScore) }} · </template>
                   <template v-if="item.bm25Score !== undefined">BM25 {{ formatDiagScore(item.bm25Score) }}</template>

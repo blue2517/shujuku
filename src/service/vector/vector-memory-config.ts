@@ -64,7 +64,7 @@ export interface VectorMemoryConfig_ACU {
     keywordGenerationMaxAttempts: number;
     keywordPromptGroup: VectorMemoryKeywordPromptSegment_ACU[];
     recallCandidateLimit: number;
-    recentFixedInjectCount: number;
+    recentFixedExcludeCount: number;
     summaryIndexSharedTotalLimit: number;
     summaryIndexVectorColumns: string[];
     summaryIndexPlotInjectColumns: string[];
@@ -146,6 +146,7 @@ function normalizeKeywordPromptGroup_ACU(
 }
 
 function normalizeNonNegativeIntegerLocal_ACU(value: any, fallbackValue: number): number {
+    if (value === undefined || value === null || value === '') return fallbackValue;
     const num = Number(value);
     return Number.isFinite(num) && num >= 0 ? Math.floor(num) : fallbackValue;
 }
@@ -224,9 +225,9 @@ export function normalizeVectorMemoryConfig_ACU(rawConfig: any): VectorMemoryCon
         keywordGenerationMaxAttempts: normalizePositiveInteger_ACU((source as any).keywordGenerationMaxAttempts, (defaults as any).keywordGenerationMaxAttempts || 3),
         keywordPromptGroup: normalizeKeywordPromptGroup_ACU(source.keywordPromptGroup, defaults.keywordPromptGroup),
         recallCandidateLimit: normalizePositiveInteger_ACU(source.recallCandidateLimit, defaults.recallCandidateLimit),
-        recentFixedInjectCount: normalizePositiveInteger_ACU(
-            (source as any).recentFixedInjectCount,
-            (defaults as any).recentFixedInjectCount || 50,
+        recentFixedExcludeCount: normalizeNonNegativeIntegerLocal_ACU(
+            (source as any).recentFixedExcludeCount,
+            Number((defaults as any).recentFixedExcludeCount ?? 5),
         ),
         summaryIndexSharedTotalLimit: normalizeNonNegativeIntegerLocal_ACU(
             (source as any).summaryIndexSharedTotalLimit,
@@ -409,7 +410,7 @@ export interface SummaryVectorIndexEffectiveConfig_ACU extends VectorMemoryConfi
     summaryIndexArchiveMaxConcurrency: number;
     summaryIndexArchiveEmbeddingConcurrency: number;
     summaryIndexKeywordMinRows: number;
-    summaryIndexRecentFixedInjectCount: number;
+    summaryIndexRecentFixedExcludeCount: number;
     summaryIndexHybridRetrievalEnabled: boolean;
     summaryIndexBm25CandidateLimit: number;
     summaryIndexRrfK: number;
@@ -453,9 +454,9 @@ export function getEffectiveSummaryVectorIndexConfig_ACU(configInput?: any): Sum
         (config as any).summaryIndexKeywordMinRows,
         Number((defaults as any).summaryIndexKeywordMinRows) || 100,
     );
-    const recentFixedInjectCount = normalizePositiveInteger_ACU(
-        (config as any).recentFixedInjectCount,
-        Number((defaults as any).recentFixedInjectCount) || 50,
+    const recentFixedExcludeCount = normalizeNonNegativeIntegerLocal_ACU(
+        (config as any).recentFixedExcludeCount,
+        Number((defaults as any).recentFixedExcludeCount ?? 5),
     );
     const bm25CandidateLimit = Math.max(
         1,
@@ -482,7 +483,7 @@ export function getEffectiveSummaryVectorIndexConfig_ACU(configInput?: any): Sum
         summaryIndexArchiveMaxConcurrency,
         summaryIndexArchiveEmbeddingConcurrency,
         summaryIndexKeywordMinRows,
-        summaryIndexRecentFixedInjectCount: recentFixedInjectCount,
+        summaryIndexRecentFixedExcludeCount: recentFixedExcludeCount,
         summaryIndexHybridRetrievalEnabled: config.hybridRetrievalEnabled !== false,
         summaryIndexBm25CandidateLimit: bm25CandidateLimit,
         summaryIndexRrfK: rrfK,

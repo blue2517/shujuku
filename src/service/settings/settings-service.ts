@@ -574,7 +574,7 @@ export   function loadSettings_ACU() {
               forceOverride_ACU('recallCandidateLimit', defaultVectorMemoryConfig_ACU.recallCandidateLimit, [100, 500]);
               fillMissingOrLegacyDefault_ACU('summaryIndexKeywordMinRows', (defaultVectorMemoryConfig_ACU as any).summaryIndexKeywordMinRows, [100]);
               forceOverride_ACU('summaryIndexKeywordMinRows', (defaultVectorMemoryConfig_ACU as any).summaryIndexKeywordMinRows, [100]);
-              fillMissing_ACU('recentFixedInjectCount', (defaultVectorMemoryConfig_ACU as any).recentFixedInjectCount || 50);
+              fillMissing_ACU('recentFixedExcludeCount', (defaultVectorMemoryConfig_ACU as any).recentFixedExcludeCount ?? 5);
               fillMissing_ACU('summaryIndexRollingDeltaEnabled', (defaultVectorMemoryConfig_ACU as any).summaryIndexRollingDeltaEnabled === true);
               fillMissing_ACU('summaryIndexRollingDeltaFoldThreshold', (defaultVectorMemoryConfig_ACU as any).summaryIndexRollingDeltaFoldThreshold || 15);
               fillMissing_ACU('hybridRetrievalEnabled', (defaultVectorMemoryConfig_ACU as any).hybridRetrievalEnabled !== false);

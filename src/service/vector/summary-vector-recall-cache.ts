@@ -18,7 +18,7 @@ export interface SummaryVectorRecallSnapshot_ACU {
 export interface SummaryVectorRecallDiagnosticItem_ACU {
     indexCode: string;
     rowKey: string;
-    kind: 'ranked' | 'recent_fixed';
+    kind: 'ranked';
     summaryPreview: string;
     matchedChunkText?: string;
     denseScore?: number;
@@ -45,7 +45,7 @@ export interface SummaryVectorRecallDiagnostics_ACU {
     fusionCandidateCount: number;
     rerankStatus: 'applied' | 'skipped' | 'failed';
     rerankError?: string;
-    recentFixedCount: number;
+    recentExcludedCount: number;
     rankedCount: number;
     totalSelectedCount: number;
     durationMs: number;

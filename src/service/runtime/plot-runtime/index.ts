@@ -8,6 +8,7 @@
 export {
     formatOutlineTableForPlot_ACU,
     formatSummaryIndexForPlot_ACU,
+    excludeRecentRowsFromSummaryIndexContent_ACU,
     extractAllAmCodesFromSummaryTable_ACU,
     buildDirectRecallTaskResponse_ACU,
 } from './plot-data-format';

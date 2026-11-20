@@ -164,7 +164,7 @@ vi.mock('../../../src/shared/defaults', () => ({
     minScore: 0.45,
     recallCandidateLimit: 100,
     summaryIndexKeywordMinRows: 200,
-    recentFixedInjectCount: 50,
+    recentFixedExcludeCount: 5,
     summaryIndexV2WriteEnabled: true,
     summaryIndexV2WriteScopeAllowlist: [],
     summaryPromptGroup: [],

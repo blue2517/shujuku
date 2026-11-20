@@ -33,6 +33,7 @@ import {
   formatOutlineTableForPlot_ACU,
   formatSummaryIndexForPlot_ACU,
   getSummaryIndexContentForPlot_ACU,
+  excludeRecentRowsFromSummaryIndexContent_ACU,
   extractAllAmCodesFromSummaryTable_ACU,
   buildDirectRecallTaskResponse_ACU,
 } from '../../../../src/service/runtime/plot-runtime/plot-data-format';
@@ -216,5 +217,68 @@ describe('buildDirectRecallTaskResponse_ACU', () => {
   it('空编码列表时输出空 recall 块', () => {
     const res = buildDirectRecallTaskResponse_ACU([], { extractTags: 'recall' });
     expect(res).toContain('<recall>\n\n</recall>');
+  });
+
+  it('带 excludedCount 元数据时在 thought 中标注已排除近期条数', () => {
+    const res = buildDirectRecallTaskResponse_ACU(['AM0001', 'AM0002'], { extractTags: 'recall' }, { totalCount: 5, excludedCount: 3 });
+    expect(res).toContain('当前纪要总数(5)未超过召回阈值，已固定排除最新 3 条，执行本地直出剩余 2 条编码');
+    expect(res).toContain('<recall>\nAM0001, AM0002\n</recall>');
+  });
+});
+
+describe('excludeRecentRowsFromSummaryIndexContent_ACU', () => {
+  const mdTable = [
+    '# 纪要索引',
+    '',
+    '| 时间 | 地点 | 概要 | 编码索引 |',
+    '|---|---|---|---|',
+    '| T1 | L1 | 概要1 | AM0001 |',
+    '| T2 | L2 | 概要2 | AM0002 |',
+    '| T3 | L3 | 概要3 | AM0003 |',
+    '| T4 | L4 | 概要4 | AM0004 |',
+  ].join('\n');
+
+  it('按 excludeIndexCodes 精确排除最近编码且幂等', () => {
+    const once = excludeRecentRowsFromSummaryIndexContent_ACU(mdTable, {
+      excludeRecentCount: 2,
+      excludeIndexCodes: ['AM0003', 'AM0004'],
+    });
+    expect(once).toContain('AM0001');
+    expect(once).toContain('AM0002');
+    expect(once).not.toContain('AM0003');
+    expect(once).not.toContain('AM0004');
+
+    const twice = excludeRecentRowsFromSummaryIndexContent_ACU(once, {
+      excludeRecentCount: 2,
+      excludeIndexCodes: ['AM0003', 'AM0004'],
+    });
+    expect(twice).toBe(once);
+  });
+
+  it('无 excludeIndexCodes 时按 excludeRecentCount 剔除末尾 N 行数据', () => {
+    const res = excludeRecentRowsFromSummaryIndexContent_ACU(mdTable, { excludeRecentCount: 2 });
+    expect(res).toContain('AM0001');
+    expect(res).toContain('AM0002');
+    expect(res).not.toContain('AM0003');
+    expect(res).not.toContain('AM0004');
+  });
+
+  it('formatSummaryIndexForPlot_ACU 支持 excludeRecentCount 排除末尾 N 条', () => {
+    const data = {
+      sheet_summary: {
+        name: '纪要表',
+        content: [
+          ['row_id', '概要', '编码索引'],
+          ['1', '旧事件1', 'AM0001'],
+          ['2', '旧事件2', 'AM0002'],
+          ['3', '近期事件3', 'AM0003'],
+        ],
+      },
+    };
+    const res = formatSummaryIndexForPlot_ACU(data, { excludeRecentCount: 1 });
+    expect(res.success).toBe(true);
+    expect(res.content).toContain('AM0001');
+    expect(res.content).toContain('AM0002');
+    expect(res.content).not.toContain('AM0003');
   });
 });

@@ -82,4 +82,31 @@ describe('formatSummaryRowsForPlotByColumns_ACU', () => {
     expect(summaryPos).toBeGreaterThan(timePos);
     expect(detailPos).toBeGreaterThan(summaryPos);
   });
+
+  it('未传 filterIndexCodes 且指定 excludeRecentCount 时排除最近 N 条', () => {
+    const result = formatSummaryRowsForPlotByColumns_ACU(tables, {
+      columns: ['概览'],
+      filterIndexCodes: null,
+      excludeRecentCount: 2,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.rowCount).toBe(1);
+    expect(result.content).toContain('### [AM0001]');
+    expect(result.content).not.toContain('AM0002');
+    expect(result.content).not.toContain('AM0003');
+  });
+
+  it('已传 filterIndexCodes 时不再二次应用 excludeRecentCount', () => {
+    const result = formatSummaryRowsForPlotByColumns_ACU(tables, {
+      columns: ['概览'],
+      filterIndexCodes: ['AM0001', 'AM0002'],
+      excludeRecentCount: 2,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.rowCount).toBe(2);
+    expect(result.content).toContain('### [AM0001]');
+    expect(result.content).toContain('### [AM0002]');
+  });
 });

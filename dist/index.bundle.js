@@ -4072,7 +4072,7 @@ $CONTENT
         summaryChunkSentenceCount: 2,
         summaryPromptGroupId: 'remote-memory-archive-default',
         archiveWithoutSummary: false,
-        recentFixedInjectCount: 50,
+        recentFixedExcludeCount: 5,
         summaryIndexSharedTotalLimit: 0,
         summaryIndexVectorColumns: [],
         summaryIndexPlotInjectColumns: [],
@@ -59411,7 +59411,7 @@ $CONTENT
         }
     }
     /** [剧情推进专用] $5 只注入"总体大纲"表（含表头） */
-    function formatOutlineTableForPlot_ACU(allTablesJson) {
+    function formatOutlineTableForPlot_ACU(allTablesJson, options = {}) {
         try {
             if (!allTablesJson || typeof allTablesJson !== 'object') {
                 return '总体大纲表：未获取到表格数据。';
@@ -59425,7 +59425,11 @@ $CONTENT
             const headers = headerRow.slice(1).map((h) => String(h ?? '').trim()).filter(Boolean);
             let out = `## 表格: 总体大纲\n`;
             out += headers.length ? `Columns: ${headers.join(', ')}\n` : 'Columns: (无表头)\n';
-            const rows = outline.content.slice(1).filter((r) => Array.isArray(r));
+            const allRows = outline.content.slice(1).filter((r) => Array.isArray(r));
+            const excludeRecentCount = Math.max(0, Math.floor(Number(options?.excludeRecentCount) || 0));
+            const rows = excludeRecentCount > 0
+                ? allRows.slice(0, Math.max(0, allRows.length - excludeRecentCount))
+                : allRows;
             if (rows.length === 0) {
                 out += '(无数据行)\n';
                 return out;
@@ -59448,7 +59452,7 @@ $CONTENT
         }
     }
     /** [剧情推进专用] $5 从纪要表本地数据读取概要和编码索引两列 */
-    function formatSummaryIndexForPlot_ACU(allTablesJson) {
+    function formatSummaryIndexForPlot_ACU(allTablesJson, options = {}) {
         try {
             if (!allTablesJson || typeof allTablesJson !== 'object') {
                 logDebug_ACU('[剧情推进] formatSummaryIndexForPlot_ACU: 未获取到表格数据');
@@ -59480,7 +59484,11 @@ $CONTENT
             }
             let out = `## 表格: 纪要索引\n`;
             out += `Columns: 概要, 编码索引\n`;
-            const rows = summaryTable.content.slice(1).filter((r) => Array.isArray(r));
+            const allRows = summaryTable.content.slice(1).filter((r) => Array.isArray(r));
+            const excludeRecentCount = Math.max(0, Math.floor(Number(options?.excludeRecentCount) || 0));
+            const rows = excludeRecentCount > 0
+                ? allRows.slice(0, Math.max(0, allRows.length - excludeRecentCount))
+                : allRows;
             if (rows.length === 0) {
                 out += '(无数据行)\n';
                 return { success: true, content: out };
@@ -59547,7 +59555,11 @@ $CONTENT
             const filterSet = Array.isArray(options.filterIndexCodes)
                 ? new Set(options.filterIndexCodes.map(code => String(code ?? '').trim()).filter(Boolean))
                 : null;
-            const dataRows = summaryTable.content.slice(1).filter((r) => Array.isArray(r));
+            const allDataRows = summaryTable.content.slice(1).filter((r) => Array.isArray(r));
+            const excludeRecentCount = Math.max(0, Math.floor(Number(options.excludeRecentCount) || 0));
+            const dataRows = (!filterSet && excludeRecentCount > 0)
+                ? allDataRows.slice(0, Math.max(0, allDataRows.length - excludeRecentCount))
+                : allDataRows;
             const blocks = [];
             for (const row of dataRows) {
                 const indexCode = String(row[indexColIdx] ?? '').trim();
@@ -59632,12 +59644,63 @@ $CONTENT
         });
         return { totalCount: rows.length, codes, foundTable: true };
     }
+    /**
+     * [剧情推进专用] 从世界书 Markdown 表格格式的纪要索引文本中排除最近 N 条数据行。
+     * 若提供 excludeIndexCodes，则按编码精确剔除（幂等，避免重复排除）；否则按顺序剔除最后 N 条数据行。
+     */
+    function excludeRecentRowsFromSummaryIndexContent_ACU(content, options = {}) {
+        if (typeof content !== 'string' || !content.trim())
+            return content;
+        const excludeRecentCount = Math.max(0, Math.floor(Number(options.excludeRecentCount) || 0));
+        const excludeCodeSet = new Set((Array.isArray(options.excludeIndexCodes) ? options.excludeIndexCodes : [])
+            .map(code => String(code ?? '').trim())
+            .filter(Boolean));
+        if (excludeRecentCount <= 0 && excludeCodeSet.size === 0)
+            return content;
+        const lines = content.split(/\r?\n/);
+        const sepIdx = lines.findIndex(line => /^\s*\|(?:\s*:?-+:?\s*\|)+\s*$/.test(line));
+        if (sepIdx === -1)
+            return content;
+        const dataRowIndices = [];
+        for (let i = sepIdx + 1; i < lines.length; i += 1) {
+            if (/^\s*\|.*\|\s*$/.test(lines[i])) {
+                dataRowIndices.push(i);
+            }
+            else {
+                break;
+            }
+        }
+        if (dataRowIndices.length === 0)
+            return content;
+        const dropIndices = new Set();
+        if (excludeCodeSet.size > 0) {
+            for (const rowLineIdx of dataRowIndices) {
+                const cells = lines[rowLineIdx].split('|').slice(1, -1).map(cell => cell.trim());
+                if (cells.some(cell => excludeCodeSet.has(cell))) {
+                    dropIndices.add(rowLineIdx);
+                }
+            }
+        }
+        else if (excludeRecentCount > 0) {
+            const startDrop = Math.max(0, dataRowIndices.length - excludeRecentCount);
+            for (let i = startDrop; i < dataRowIndices.length; i += 1) {
+                dropIndices.add(dataRowIndices[i]);
+            }
+        }
+        if (dropIndices.size === 0)
+            return content;
+        return lines.filter((_, idx) => !dropIndices.has(idx)).join('\n');
+    }
     /** [剧情推进专用] 为跳过 AI 调用的直出任务构建模拟响应文本 */
-    function buildDirectRecallTaskResponse_ACU(codes, task) {
+    function buildDirectRecallTaskResponse_ACU(codes, task, meta) {
         const codeListStr = codes.length > 0 ? codes.join(', ') : '';
         const extractTags = String(task?.extractTags || 'recall');
         const tagList = extractTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-        let response = `<thought>当前纪要总数(${codes.length})未超过召回阈值，执行本地全量直出召回。</thought>\n`;
+        const excludedCount = Math.max(0, Math.floor(Number(meta?.excludedCount) || 0));
+        const totalCount = meta?.totalCount !== undefined ? Number(meta.totalCount) : (codes.length + excludedCount);
+        let response = excludedCount > 0
+            ? `<thought>当前纪要总数(${totalCount})未超过召回阈值，已固定排除最新 ${excludedCount} 条，执行本地直出剩余 ${codes.length} 条编码。</thought>\n`
+            : `<thought>当前纪要总数(${codes.length})未超过召回阈值，执行本地全量直出召回。</thought>\n`;
         if (tagList.includes('recall') || tagList.length === 0) {
             response += `<recall>\n${codeListStr}\n</recall>\n`;
         }
@@ -69450,6 +69513,7 @@ $CONTENT
         let worldbookContent = '';
         logDebug_ACU('[剧情推进] $1 世界书内容: 延迟到任务级计算');
         let outlineTableContent = '';
+        let effectiveRecentExcludeCount = 0;
         try {
             if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object') {
                 try {
@@ -69468,32 +69532,63 @@ $CONTENT
                 : [];
             const isolationKey = settings_ACU?.dataIsolationEnabled ? String(settings_ACU?.dataIsolationCode || '') : '';
             const recallSnapshot = getLatestSummaryVectorRecallSnapshot_ACU(currentChatFileIdentifier_ACU || undefined, isolationKey);
+            const isCrossfireModeEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true
+                || settings_ACU?.summaryVectorIndexModeDefault === true;
+            const rawRecentExcludeCount = Math.max(0, Math.floor(Number(vectorConfig?.recentFixedExcludeCount) || 0));
+            effectiveRecentExcludeCount = isCrossfireModeEnabled ? rawRecentExcludeCount : 0;
+            // 交火模式已启用但未触发向量召回（无 recallSnapshot，常见于纪要条数未达向量触发阈值）时，
+            // 传给推进 AI 的 $5 纪要同样排除最新 N 条，避免与近期正文重复或误导。
+            const plotExcludeRecentCount = (!recallSnapshot && effectiveRecentExcludeCount > 0)
+                ? effectiveRecentExcludeCount
+                : 0;
+            const plotExcludeRecentCodes = (plotExcludeRecentCount > 0 && currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object')
+                ? (() => {
+                    const summaryInfo = extractAllAmCodesFromSummaryTable_ACU(currentJsonTableData_ACU);
+                    return summaryInfo.codes.length > 0
+                        ? summaryInfo.codes.slice(-plotExcludeRecentCount)
+                        : [];
+                })()
+                : [];
             if (customPlotColumns.length > 0 && currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object') {
                 const projected = formatSummaryRowsForPlotByColumns_ACU(currentJsonTableData_ACU, {
                     columns: customPlotColumns,
                     filterIndexCodes: recallSnapshot ? recallSnapshot.indexCodes : null,
+                    excludeRecentCount: plotExcludeRecentCount,
                 });
                 if (projected.success) {
                     outlineTableContent = projected.content;
                     logDebug_ACU(`[剧情推进] $5 使用自定义投影列(${customPlotColumns.join('、')})，行数=${projected.rowCount}`
-                        + (recallSnapshot ? `（经交火初筛 ${recallSnapshot.indexCodes.length} 个编码）` : ''));
+                        + (recallSnapshot
+                            ? `（经交火初筛 ${recallSnapshot.indexCodes.length} 个编码）`
+                            : (plotExcludeRecentCount > 0 ? `（未触发向量召回，已固定排除最新 ${plotExcludeRecentCount} 条）` : '')));
                 }
             }
             if (!outlineTableContent) {
                 const summaryIndexWorldbookContent = await getSummaryIndexContentForPlot_ACU(plotSettings);
                 if (typeof summaryIndexWorldbookContent === 'string' && summaryIndexWorldbookContent.trim()) {
-                    outlineTableContent = summaryIndexWorldbookContent;
-                    logDebug_ACU('[剧情推进] $5 使用世界书纪要索引条目内容');
+                    outlineTableContent = plotExcludeRecentCount > 0
+                        ? excludeRecentRowsFromSummaryIndexContent_ACU(summaryIndexWorldbookContent, {
+                            excludeRecentCount: plotExcludeRecentCount,
+                            excludeIndexCodes: plotExcludeRecentCodes,
+                        })
+                        : summaryIndexWorldbookContent;
+                    logDebug_ACU('[剧情推进] $5 使用世界书纪要索引条目内容'
+                        + (plotExcludeRecentCount > 0 ? `（未触发向量召回，已固定排除最新 ${plotExcludeRecentCount} 条）` : ''));
                 }
                 else if (currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object') {
-                    const summaryIndexResult = formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU);
+                    const summaryIndexResult = plotExcludeRecentCount > 0
+                        ? formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: plotExcludeRecentCount })
+                        : formatSummaryIndexForPlot_ACU(currentJsonTableData_ACU);
                     if (summaryIndexResult.success) {
                         outlineTableContent = summaryIndexResult.content;
-                        logDebug_ACU('[剧情推进] $5 未找到世界书纪要索引条目，使用纪要表的概要和编码索引列');
+                        logDebug_ACU('[剧情推进] $5 未找到世界书纪要索引条目，使用纪要表的概要和编码索引列'
+                            + (plotExcludeRecentCount > 0 ? `（已固定排除最新 ${plotExcludeRecentCount} 条）` : ''));
                     }
                     else {
                         logDebug_ACU('[剧情推进] $5 纪要表读取失败，回退使用总体大纲表。原因:', summaryIndexResult.content);
-                        outlineTableContent = formatOutlineTableForPlot_ACU(currentJsonTableData_ACU);
+                        outlineTableContent = plotExcludeRecentCount > 0
+                            ? formatOutlineTableForPlot_ACU(currentJsonTableData_ACU, { excludeRecentCount: plotExcludeRecentCount })
+                            : formatOutlineTableForPlot_ACU(currentJsonTableData_ACU);
                         logDebug_ACU('[剧情推进] $5 回退使用总体大纲表内容');
                     }
                 }
@@ -69692,6 +69787,7 @@ $CONTENT
             seedContentForConditional,
             recentContextMessages: Array.isArray(agentContextMessages) ? agentContextMessages : [],
             allTablesJson: currentJsonTableData_ACU,
+            recentFixedExcludeCount: effectiveRecentExcludeCount,
         };
     }
     async function renderPlotTaskMessages_ACU(task, sharedContext, runtimeOptions = {}) {
@@ -69760,8 +69856,19 @@ $CONTENT
             const summaryInfo = extractAllAmCodesFromSummaryTable_ACU(sharedContext.allTablesJson);
             const recallCount = normalizePositiveInteger_ACU$1(sharedContext?.plotSettings?.recallCount, 20);
             if (summaryInfo.totalCount <= recallCount) {
-                logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 当前纪要条数(${summaryInfo.totalCount}) <= zhaohui(${recallCount})，命中本地直出规则，跳过 AI 请求。`);
-                const rawResponse = buildDirectRecallTaskResponse_ACU(summaryInfo.codes, normalizedTask);
+                const recentExcludeCount = Math.max(0, Math.floor(Number(sharedContext.recentFixedExcludeCount) || 0));
+                const excludedCount = Math.min(recentExcludeCount, summaryInfo.codes.length);
+                const directCodes = excludedCount > 0
+                    ? summaryInfo.codes.slice(0, Math.max(0, summaryInfo.codes.length - excludedCount))
+                    : summaryInfo.codes;
+                logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 当前纪要条数(${summaryInfo.totalCount}) <= zhaohui(${recallCount})，命中本地直出规则，跳过 AI 请求`
+                    + (excludedCount > 0 ? `（已固定排除最新 ${excludedCount} 条，输出剩余 ${directCodes.length} 条编码）。` : '。'));
+                const rawResponse = excludedCount > 0
+                    ? buildDirectRecallTaskResponse_ACU(directCodes, normalizedTask, {
+                        totalCount: summaryInfo.totalCount,
+                        excludedCount,
+                    })
+                    : buildDirectRecallTaskResponse_ACU(directCodes, normalizedTask);
                 const { tagNames, extractedTags, injectedFragments, injectOnlyTags, injectOnlyFragments, injectOnlyTagNames } = extractPlotTagsFromResponse_ACU(rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
                 return {
                     taskId: normalizedTask.id,
@@ -85087,6 +85194,8 @@ $CONTENT
             : JSON.parse(JSON.stringify(fallbackValue));
     }
     function normalizeNonNegativeIntegerLocal_ACU(value, fallbackValue) {
+        if (value === undefined || value === null || value === '')
+            return fallbackValue;
         const num = Number(value);
         return Number.isFinite(num) && num >= 0 ? Math.floor(num) : fallbackValue;
     }
@@ -85147,7 +85256,7 @@ $CONTENT
             keywordGenerationMaxAttempts: normalizePositiveInteger_ACU$1(source.keywordGenerationMaxAttempts, defaults.keywordGenerationMaxAttempts || 3),
             keywordPromptGroup: normalizeKeywordPromptGroup_ACU(source.keywordPromptGroup, defaults.keywordPromptGroup),
             recallCandidateLimit: normalizePositiveInteger_ACU$1(source.recallCandidateLimit, defaults.recallCandidateLimit),
-            recentFixedInjectCount: normalizePositiveInteger_ACU$1(source.recentFixedInjectCount, defaults.recentFixedInjectCount || 50),
+            recentFixedExcludeCount: normalizeNonNegativeIntegerLocal_ACU(source.recentFixedExcludeCount, Number(defaults.recentFixedExcludeCount ?? 5)),
             summaryIndexSharedTotalLimit: normalizeNonNegativeIntegerLocal_ACU(source.summaryIndexSharedTotalLimit, Number(defaults.summaryIndexSharedTotalLimit) || 0),
             summaryIndexVectorColumns: normalizeColumnNameList_ACU(source.summaryIndexVectorColumns),
             summaryIndexPlotInjectColumns: normalizeColumnNameList_ACU(source.summaryIndexPlotInjectColumns),
@@ -85305,7 +85414,7 @@ $CONTENT
         // T9：归档 embedding 批次的有界并发度（同时进行中的批次上限）。独立于 summaryIndexArchiveMaxConcurrency（批大小）。
         const summaryIndexArchiveEmbeddingConcurrency = normalizePositiveInteger_ACU$1(config.summaryIndexArchiveEmbeddingConcurrency, Number(defaults.summaryIndexArchiveEmbeddingConcurrency) || 3);
         const summaryIndexKeywordMinRows = normalizePositiveInteger_ACU$1(config.summaryIndexKeywordMinRows, Number(defaults.summaryIndexKeywordMinRows) || 100);
-        const recentFixedInjectCount = normalizePositiveInteger_ACU$1(config.recentFixedInjectCount, Number(defaults.recentFixedInjectCount) || 50);
+        const recentFixedExcludeCount = normalizeNonNegativeIntegerLocal_ACU(config.recentFixedExcludeCount, Number(defaults.recentFixedExcludeCount ?? 5));
         const bm25CandidateLimit = Math.max(1, normalizePositiveInteger_ACU$1(config.bm25CandidateLimit, Number(defaults.bm25CandidateLimit) || recallCandidateLimit));
         const rrfK = normalizePositiveInteger_ACU$1(config.rrfK, Number(defaults.rrfK) || 60);
         const summaryIndexRollingDeltaFoldThreshold = normalizePositiveInteger_ACU$1(config.summaryIndexRollingDeltaFoldThreshold, Number(defaults.summaryIndexRollingDeltaFoldThreshold) || 15);
@@ -85322,7 +85431,7 @@ $CONTENT
             summaryIndexArchiveMaxConcurrency,
             summaryIndexArchiveEmbeddingConcurrency,
             summaryIndexKeywordMinRows,
-            summaryIndexRecentFixedInjectCount: recentFixedInjectCount,
+            summaryIndexRecentFixedExcludeCount: recentFixedExcludeCount,
             summaryIndexHybridRetrievalEnabled: config.hybridRetrievalEnabled !== false,
             summaryIndexBm25CandidateLimit: bm25CandidateLimit,
             summaryIndexRrfK: rrfK,
@@ -85929,7 +86038,7 @@ $CONTENT
                 forceOverride_ACU('recallCandidateLimit', defaultVectorMemoryConfig_ACU.recallCandidateLimit, [100, 500]);
                 fillMissingOrLegacyDefault_ACU('summaryIndexKeywordMinRows', defaultVectorMemoryConfig_ACU.summaryIndexKeywordMinRows, [100]);
                 forceOverride_ACU('summaryIndexKeywordMinRows', defaultVectorMemoryConfig_ACU.summaryIndexKeywordMinRows, [100]);
-                fillMissing_ACU('recentFixedInjectCount', defaultVectorMemoryConfig_ACU.recentFixedInjectCount || 50);
+                fillMissing_ACU('recentFixedExcludeCount', defaultVectorMemoryConfig_ACU.recentFixedExcludeCount ?? 5);
                 fillMissing_ACU('summaryIndexRollingDeltaEnabled', defaultVectorMemoryConfig_ACU.summaryIndexRollingDeltaEnabled === true);
                 fillMissing_ACU('summaryIndexRollingDeltaFoldThreshold', defaultVectorMemoryConfig_ACU.summaryIndexRollingDeltaFoldThreshold || 15);
                 fillMissing_ACU('hybridRetrievalEnabled', defaultVectorMemoryConfig_ACU.hybridRetrievalEnabled !== false);
@@ -88734,6 +88843,10 @@ $CONTENT
             const parsed = Number.parseInt(String(rawValue ?? '').trim(), 10);
             return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackValue;
         };
+        const parseNonNegativeIntegerField_ACU = (rawValue, fallbackValue) => {
+            const parsed = Number.parseInt(String(rawValue ?? '').trim(), 10);
+            return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallbackValue;
+        };
         const parseFloatField_ACU = (rawValue, fallbackValue) => {
             const parsed = Number.parseFloat(String(rawValue ?? '').trim());
             return Number.isFinite(parsed) ? parsed : fallbackValue;
@@ -88867,7 +88980,7 @@ $CONTENT
         });
         bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-recent-fixed-inject-count`, 'input change', ($input) => {
             const defaults = getDefaultVectorMemoryConfig_ACU();
-            updateVectorMemoryField_ACU('recentFixedInjectCount', parseIntegerField_ACU($input.val(), defaults.recentFixedInjectCount || 50));
+            updateVectorMemoryField_ACU('recentFixedExcludeCount', parseNonNegativeIntegerField_ACU($input.val(), defaults.recentFixedExcludeCount ?? 5));
         });
         bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-rolling-delta-enabled`, 'change', ($input) => {
             updateVectorMemoryField_ACU('summaryIndexRollingDeltaEnabled', $input.is(':checked'));
@@ -99396,7 +99509,7 @@ $CONTENT
         setVal('worldbook-vector-memory-overview-sentence-limit', vectorMemoryConfig.summaryChunkSentenceCount);
         setChecked('worldbook-vector-memory-archive-without-summary', vectorMemoryConfig.archiveWithoutSummary === true);
         setVal('worldbook-vector-memory-recall-candidate-limit', vectorMemoryConfig.recallCandidateLimit);
-        setVal('worldbook-vector-memory-recent-fixed-inject-count', vectorMemoryConfig.recentFixedInjectCount || 50);
+        setVal('worldbook-vector-memory-recent-fixed-inject-count', vectorMemoryConfig.recentFixedExcludeCount ?? 5);
         setChecked('worldbook-vector-memory-rolling-delta-enabled', vectorMemoryConfig.summaryIndexRollingDeltaEnabled === true);
         setVal('worldbook-vector-memory-rolling-delta-fold-threshold', vectorMemoryConfig.summaryIndexRollingDeltaFoldThreshold || 15);
         setVal('worldbook-vector-memory-entry-comment', vectorMemoryConfig.entryComment);
@@ -103052,14 +103165,6 @@ $CONTENT
         return selected.map((item) => {
             const summarySource = normalizeText_ACU(item.row.summary || item.row.vectorSourceText || '');
             const summaryPreview = summarySource.length > 90 ? `${summarySource.slice(0, 90)}…` : summarySource;
-            if (item.kind === 'recent_fixed') {
-                return {
-                    indexCode: String(item.row.indexCode || ''),
-                    rowKey: String(item.row.rowKey || ''),
-                    kind: 'recent_fixed',
-                    summaryPreview,
-                };
-            }
             const chunkText = normalizeText_ACU(item.chunk?.text || '');
             return {
                 indexCode: String(item.row.indexCode || ''),
@@ -103074,61 +103179,6 @@ $CONTENT
                 score: item.score,
             };
         });
-    }
-    // T5：query embedding 失败时的降级路径 —— 仅注入最近固定行，不依赖向量检索。
-    // 仅在 recentFixedRows 非空时调用；调用方负责确认 recentFixedRows.length > 0。
-    async function injectRecentFixedRowsOnly_ACU(recentFixedRows, scopeMeta = {}, options = {}) {
-        const selected = recentFixedRows
-            .map((row) => ({ kind: 'recent_fixed', row }))
-            .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
-        const selectedIndexCodes = selected.map((item) => item.row.indexCode).filter(Boolean);
-        if (!options.dryRun) {
-            const content = buildSummaryIndexOverwriteContent_ACU(selected);
-            await upsertOriginalSummaryIndexEntry_ACU(content);
-            setLatestSummaryVectorRecallSnapshot_ACU({
-                chatKey: String(scopeMeta.chatKey || ''),
-                isolationKey: String(scopeMeta.isolationKey || ''),
-                indexCodes: selectedIndexCodes,
-                rowKeys: selected.map((item) => item.row.rowKey).filter(Boolean),
-                updatedAt: Date.now(),
-            });
-        }
-        const diagnostics = {
-            chatKey: String(scopeMeta.chatKey || ''),
-            isolationKey: String(scopeMeta.isolationKey || ''),
-            source: String(options.source || 'unknown'),
-            dryRun: options.dryRun === true,
-            success: true,
-            skipped: false,
-            reason: 'query_embedding_failed_recent_fixed_only',
-            userInput: String(options.userInput || ''),
-            queryMode: options.queryMode || 'direct',
-            queryText: String(options.queryText || ''),
-            keywords: Array.isArray(options.keywords) ? [...options.keywords] : [],
-            denseCandidateCount: 0,
-            sparseCandidateCount: 0,
-            fusionCandidateCount: 0,
-            rerankStatus: 'skipped',
-            recentFixedCount: selected.length,
-            rankedCount: 0,
-            totalSelectedCount: selected.length,
-            durationMs: Math.max(0, Date.now() - (options.startedAt || Date.now())),
-            updatedAt: Date.now(),
-            items: buildDiagnosticItems_ACU(selected),
-        };
-        setLatestSummaryVectorRecallDiagnostics_ACU(diagnostics);
-        return {
-            success: true,
-            reason: 'query_embedding_failed_recent_fixed_only',
-            keywordCount: 0,
-            candidateCount: 0,
-            injectedCount: selected.length,
-            selectedIndexCodes,
-            denseCandidateCount: 0,
-            sparseCandidateCount: 0,
-            fusionCandidateCount: 0,
-            diagnostics,
-        };
     }
     async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
         const startedAt = Date.now();
@@ -103172,7 +103222,7 @@ $CONTENT
                 fusionCandidateCount: partialResult.fusionCandidateCount ?? 0,
                 rerankStatus: diagPartial.rerankStatus || 'skipped',
                 rerankError: diagPartial.rerankError,
-                recentFixedCount: diagPartial.recentFixedCount ?? 0,
+                recentExcludedCount: diagPartial.recentExcludedCount ?? 0,
                 rankedCount: diagPartial.rankedCount ?? 0,
                 totalSelectedCount: partialResult.injectedCount ?? 0,
                 durationMs: Math.max(0, Date.now() - startedAt),
@@ -103314,76 +103364,47 @@ $CONTENT
             chatKey: String(state.manifest?.chatKey || ''),
             isolationKey: normalizeSummaryVectorIsolationKey_ACU(latestLayer?.isolationKey ?? state.manifest?.isolationKey),
         };
-        // ── 最近 X 条固定注入 + 共享总上限配额 ──
+        // ── 固定排除最近 X 条（近期正文已在上下文中，不参与检索也不注入） + 召回总上限配额 ──
         const sharedTotalLimit = Math.max(0, Math.floor(Number(config.summaryIndexSharedTotalLimit) || 0));
-        const rawRecentFixedLimit = Math.max(0, config.summaryIndexRecentFixedInjectCount || 0);
-        const effectiveRecentFixedLimit = sharedTotalLimit > 0
-            ? Math.min(rawRecentFixedLimit, sharedTotalLimit)
-            : rawRecentFixedLimit;
-        const recentFixedCount = Math.min(effectiveRecentFixedLimit, rows.length);
+        const rawRecentExcludeCount = Math.max(0, Math.floor(Number(config.summaryIndexRecentFixedExcludeCount) || 0));
+        const recentExcludedCount = Math.min(rawRecentExcludeCount, rows.length);
         const rowsSortedByOrderDesc = [...rows].sort((left, right) => (Number(right.rowOrder) || 0) - (Number(left.rowOrder) || 0));
-        const recentFixedRows = rowsSortedByOrderDesc.slice(0, recentFixedCount);
-        const recentFixedRowKeys = new Set(recentFixedRows.map((row) => row.rowKey));
+        const recentExcludedRows = rowsSortedByOrderDesc.slice(0, recentExcludedCount);
+        const recentExcludedRowKeys = new Set(recentExcludedRows.map((row) => row.rowKey));
         const effectiveVectorTopK = sharedTotalLimit > 0
-            ? Math.min(config.topK, Math.max(0, sharedTotalLimit - recentFixedRows.length))
+            ? Math.min(config.topK, sharedTotalLimit)
             : config.topK;
-        // 较早的行（不参与排序的候选池）
-        const olderRows = rows.filter((row) => !recentFixedRowKeys.has(row.rowKey));
-        // T5：query embedding 失败不中断宿主生成。generateKeywords/createEmbeddings 抛异常或返回空向量时，
-        // 若存在最近固定行（recentFixedRows），降级为仅注入固定行（不依赖向量），继续原始生成；
-        // 否则保持原行为（空向量返回 empty_query_embedding；异常穿透给上层 init.ts 的 try/catch 兜底）。
+        // 较早的历史行（排除最近 N 条后的候选池）
+        const olderRows = rows.filter((row) => !recentExcludedRowKeys.has(row.rowKey));
+        if (olderRows.length === 0) {
+            if (!dryRun)
+                clearLatestSummaryVectorRecallSnapshot_ACU();
+            return recordAndReturn({ success: false, skipped: true, reason: 'all_rows_excluded' }, { ...recallScopeMeta, recentExcludedCount: recentExcludedRows.length });
+        }
+        // query embedding 失败时保持异常穿透给上层兜底；空向量返回 empty_query_embedding。
         let keywords = [];
         let queryText = '';
         let queryVector = [];
-        try {
-            if (config.keywordGenerationEnabled === false) {
-                queryText = buildDirectQueryText_ACU(config, userInput);
-            }
-            else {
-                keywords = await generateKeywords_ACU(config, userInput);
-                queryText = [userInput, keywords.join('，')].filter(Boolean).join('\n关键词：');
-            }
-            const embeddings = await createEmbeddings_ACU({
-                endpoint: config.embeddingEndpoint,
-                apiKey: config.embeddingApiKey,
-                model: config.embeddingModel,
-                input: [queryText],
-            });
-            queryVector = embeddings[0]?.embedding || [];
-            if (queryVector.length === 0) {
-                if (recentFixedRows.length > 0) {
-                    logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，降级为仅注入最近固定行:', userInput);
-                    return await injectRecentFixedRowsOnly_ACU(recentFixedRows, recallScopeMeta, {
-                        dryRun,
-                        source,
-                        userInput,
-                        queryMode,
-                        queryText,
-                        keywords,
-                        startedAt,
-                    });
-                }
-                if (!dryRun)
-                    clearLatestSummaryVectorRecallSnapshot_ACU();
-                return recordAndReturn({ success: false, skipped: true, reason: 'empty_query_embedding' }, { ...recallScopeMeta, queryText, keywords });
-            }
+        if (config.keywordGenerationEnabled === false) {
+            queryText = buildDirectQueryText_ACU(config, userInput);
         }
-        catch (error) {
-            if (recentFixedRows.length > 0) {
-                logWarn_ACU('[交火模式纪要索引] query embedding 失败，降级为仅注入最近固定行，继续原始生成:', error);
-                return await injectRecentFixedRowsOnly_ACU(recentFixedRows, recallScopeMeta, {
-                    dryRun,
-                    source,
-                    userInput,
-                    queryMode,
-                    queryText,
-                    keywords,
-                    startedAt,
-                });
-            }
-            throw error;
+        else {
+            keywords = await generateKeywords_ACU(config, userInput);
+            queryText = [userInput, keywords.join('，')].filter(Boolean).join('\n关键词：');
         }
-        // 只对较早行的 chunks 做向量匹配
+        const embeddings = await createEmbeddings_ACU({
+            endpoint: config.embeddingEndpoint,
+            apiKey: config.embeddingApiKey,
+            model: config.embeddingModel,
+            input: [queryText],
+        });
+        queryVector = embeddings[0]?.embedding || [];
+        if (queryVector.length === 0) {
+            if (!dryRun)
+                clearLatestSummaryVectorRecallSnapshot_ACU();
+            return recordAndReturn({ success: false, skipped: true, reason: 'empty_query_embedding' }, { ...recallScopeMeta, queryText, keywords, recentExcludedCount: recentExcludedRows.length });
+        }
+        // 只对排除近期后的较早历史行 chunks 做向量匹配
         const olderRowKeys = new Set(olderRows.map((row) => row.rowKey));
         const olderChunks = chunks.filter((chunk) => olderRowKeys.has(chunk.rowKey));
         const searchableCandidates = olderChunks
@@ -103410,7 +103431,7 @@ $CONTENT
             .sort((left, right) => right.score - left.score)
             .slice(0, config.summaryIndexCandidateLimit);
         // T10：BM25 语料缓存键。候选集（searchableCandidates）的 chunk 集合指纹保证
-        // recentFixedCount / config 变化导致候选集变化时缓存自然失效；V2 快照的
+        // recentExcludedCount / config 变化导致候选集变化时缓存自然失效；V2 快照的
         // writeGeneration 唯一标识一次归档内容（不可变身份），作为前缀避免跨快照误用。
         const bm25CacheKey = `${state.manifest?.storageIdentity?.writeGeneration || 'legacy'}::${state.manifest?.indexId || ''}::${searchableCandidates
         .map((candidate) => candidate.chunk.textHash || candidate.chunk.chunkId || candidate.chunk.text)
@@ -103422,13 +103443,13 @@ $CONTENT
         const candidates = config.summaryIndexHybridRetrievalEnabled
             ? reciprocalRankFusion_ACU([denseCandidates, sparseCandidates], config.summaryIndexRrfK, fusionLimit)
             : denseCandidates;
-        logDebug_ACU(`[交火模式纪要索引] 混合召回候选：dense=${denseCandidates.length}, bm25=${sparseCandidates.length}, fusion=${candidates.length}, hybrid=${config.summaryIndexHybridRetrievalEnabled === true}`);
-        if (candidates.length === 0 && recentFixedRows.length === 0) {
+        logDebug_ACU(`[交火模式纪要索引] 混合召回候选：excludedRecent=${recentExcludedRows.length}, dense=${denseCandidates.length}, bm25=${sparseCandidates.length}, fusion=${candidates.length}, hybrid=${config.summaryIndexHybridRetrievalEnabled === true}`);
+        if (candidates.length === 0) {
             if (!dryRun)
                 clearLatestSummaryVectorRecallSnapshot_ACU();
-            return recordAndReturn({ success: false, skipped: true, reason: 'no_candidates', keywordCount: keywords.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length }, { ...recallScopeMeta, queryText, keywords });
+            return recordAndReturn({ success: false, skipped: true, reason: 'no_candidates', keywordCount: keywords.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length }, { ...recallScopeMeta, queryText, keywords, recentExcludedCount: recentExcludedRows.length });
         }
-        // Rerank 只处理较早行的候选
+        // Rerank 只处理排除近期后的较早历史行候选
         const rerankResult = (candidates.length > 0 && effectiveVectorTopK > 0)
             ? await rerankCandidates_ACU(config, queryText, candidates)
             : { candidates: [], status: 'skipped' };
@@ -103450,18 +103471,12 @@ $CONTENT
                 });
             }
         }
-        // 合并：最近固定行 + TopK 排序行（去重，固定行优先）
-        for (const row of recentFixedRows) {
-            if (!selectedByRow.has(row.rowKey)) {
-                selectedByRow.set(row.rowKey, { kind: 'recent_fixed', row });
-            }
-        }
         const selected = Array.from(selectedByRow.values())
             .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
         if (selected.length === 0) {
             if (!dryRun)
                 clearLatestSummaryVectorRecallSnapshot_ACU();
-            return recordAndReturn({ success: false, skipped: true, reason: 'no_selected_rows', keywordCount: keywords.length, candidateCount: candidates.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length }, { ...recallScopeMeta, queryText, keywords, rerankStatus: rerankResult.status, rerankError: rerankResult.error });
+            return recordAndReturn({ success: false, skipped: true, reason: 'no_selected_rows', keywordCount: keywords.length, candidateCount: candidates.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length }, { ...recallScopeMeta, queryText, keywords, rerankStatus: rerankResult.status, rerankError: rerankResult.error, recentExcludedCount: recentExcludedRows.length });
         }
         const selectedIndexCodes = selected.map((item) => item.row.indexCode).filter(Boolean);
         if (!dryRun) {
@@ -103474,7 +103489,7 @@ $CONTENT
                 rowKeys: selected.map((item) => item.row.rowKey).filter(Boolean),
                 updatedAt: Date.now(),
             });
-            logDebug_ACU(`[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`);
+            logDebug_ACU(`[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（已固定排除最新 ${recentExcludedRows.length} 条，排序选取 ${selected.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`);
         }
         return recordAndReturn({ success: true, keywordCount: keywords.length, candidateCount: candidates.length, injectedCount: selected.length, selectedIndexCodes, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length }, {
             ...recallScopeMeta,
@@ -103482,8 +103497,8 @@ $CONTENT
             keywords,
             rerankStatus: rerankResult.status,
             rerankError: rerankResult.error,
-            recentFixedCount: recentFixedRows.length,
-            rankedCount: selected.length - recentFixedRows.length,
+            recentExcludedCount: recentExcludedRows.length,
+            rankedCount: selected.length,
             items: buildDiagnosticItems_ACU(selected),
         });
     }
@@ -134161,8 +134176,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-match-fields[data-v-d8b751ff] {\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend[data-v-d8b751ff] {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid[data-v-d8b751ff] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-plot-match-fields__toggle-row[data-v-d8b751ff] {\r\n  margin-top: 4px;\n}\r\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0-d8b751ff");
-    var PlotMatchReplaceFields_vue_vue_type_style_index_0_scoped_d8b751ff_lang = null;
+    injectSfcStyle("\n.acu-v2-plot-match-fields[data-v-c9c9fd9f] {\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend[data-v-c9c9fd9f] {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid[data-v-c9c9fd9f] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-plot-match-fields__toggle-row[data-v-c9c9fd9f] {\r\n  margin-top: 4px;\n}\r\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0-c9c9fd9f");
+    var PlotMatchReplaceFields_vue_vue_type_style_index_0_scoped_c9c9fd9f_lang = null;
 
     const _hoisted_1$K = { class: "acu-v2-plot-match-fields" };
     const _hoisted_2$D = { class: "acu-v2-plot-match-fields__grid" };
@@ -134237,7 +134252,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		]),
 		createBaseVNode("div", _hoisted_3$x, [createVNode($setup["AcuFormRow"], {
 			label: "纪要不足时本地直出",
-			hint: "开启后，当大纲/纪要条数 ≤ zhaohui 时跳过 AI 推进请求，直接提取全部索引编码注入最终提示词，降低延迟并节省 Token。"
+			hint: "开启后，当大纲/纪要条数 ≤ zhaohui 时跳过 AI 推进请求，直接提取索引编码注入最终提示词（交火模式下会自动排除最近固定排除的 N 条），降低延迟并节省 Token。"
 		}, {
 			default: withCtx(() => [createVNode($setup["AcuToggle"], {
 				"model-value": !!$props.directRecallWhenBelowThreshold,
@@ -134247,7 +134262,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		})])
 	]);
     }
-    var PlotMatchReplaceFields = /*#__PURE__*/ _export_sfc(_sfc_main$L, [["render", _sfc_render$L], ["__scopeId", "data-v-d8b751ff"]]);
+    var PlotMatchReplaceFields = /*#__PURE__*/ _export_sfc(_sfc_main$L, [["render", _sfc_render$L], ["__scopeId", "data-v-c9c9fd9f"]]);
 
     const DEFAULT_ROLE_OPTIONS = [
         { value: 'SYSTEM', label: 'SYSTEM' },
@@ -145536,9 +145551,9 @@ Expected function or array of functions, received type ${typeof value}.`
     function getDefaultVectorMemoryConfigForV2() {
         return defaultVectorMemoryConfig_ACU;
     }
-    function getDefaultRecentFixedInjectCount() {
-        const value = Number(getDefaultVectorMemoryConfigForV2().recentFixedInjectCount);
-        return Number.isFinite(value) && value > 0 ? Math.floor(value) : 50;
+    function getDefaultRecentFixedExcludeCount() {
+        const value = Number(getDefaultVectorMemoryConfigForV2().recentFixedExcludeCount);
+        return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 5;
     }
     function getDefaultRollingDeltaFoldThreshold() {
         const value = Number(getDefaultVectorMemoryConfigForV2().summaryIndexRollingDeltaFoldThreshold);
@@ -145585,7 +145600,7 @@ Expected function or array of functions, received type ${typeof value}.`
             topK: defaults.topK,
             minScore: defaults.minScore,
             recallCandidateLimit: defaults.recallCandidateLimit,
-            recentFixedInjectCount: defaults.recentFixedInjectCount,
+            recentFixedExcludeCount: getDefaultRecentFixedExcludeCount(),
             summaryIndexSharedTotalLimit: defaults.summaryIndexSharedTotalLimit ?? 0,
             summaryIndexVectorColumns: Array.isArray(defaults.summaryIndexVectorColumns) ? [...defaults.summaryIndexVectorColumns] : [],
             summaryIndexPlotInjectColumns: Array.isArray(defaults.summaryIndexPlotInjectColumns) ? [...defaults.summaryIndexPlotInjectColumns] : [],
@@ -145681,7 +145696,9 @@ Expected function or array of functions, received type ${typeof value}.`
             form.topK = config.topK;
             form.minScore = config.minScore;
             form.recallCandidateLimit = config.recallCandidateLimit;
-            form.recentFixedInjectCount = config.recentFixedInjectCount;
+            form.recentFixedExcludeCount = Number.isFinite(Number(config.recentFixedExcludeCount)) && Number(config.recentFixedExcludeCount) >= 0
+                ? Math.floor(Number(config.recentFixedExcludeCount))
+                : getDefaultRecentFixedExcludeCount();
             form.summaryIndexSharedTotalLimit = Number(config.summaryIndexSharedTotalLimit) || 0;
             form.summaryIndexVectorColumns = Array.isArray(config.summaryIndexVectorColumns)
                 ? [...config.summaryIndexVectorColumns]
@@ -145771,25 +145788,6 @@ Expected function or array of functions, received type ${typeof value}.`
             pushSavedMessage();
         }
         function setNumberField(key, raw) {
-            if (key === 'recentFixedInjectCount') {
-                const value = Number(raw);
-                if (!Number.isFinite(value) || value <= 0) {
-                    const fallback = getDefaultRecentFixedInjectCount();
-                    form.recentFixedInjectCount = Number.isFinite(value) ? Math.floor(value) : 0;
-                    toast.warning(`固定写入必须是正整数，已重置为默认值 ${fallback}。`);
-                    form.recentFixedInjectCount = fallback;
-                    const result = updateGlobalVectorMemoryConfigFields_ACU({
-                        recentFixedInjectCount: fallback,
-                    });
-                    if (!result.ok) {
-                        toast.error(result.message || '保存失败。');
-                        return;
-                    }
-                    runValidation();
-                    pushSavedMessage();
-                    return;
-                }
-            }
             if (key === 'summaryIndexRollingDeltaFoldThreshold') {
                 const value = Number(raw);
                 if (!Number.isFinite(value) || value <= 0) {
@@ -145821,7 +145819,24 @@ Expected function or array of functions, received type ${typeof value}.`
             pushSavedMessage();
         }
         function setNonNegativeNumberField(key, raw) {
-            const parsed = Number(raw);
+            const trimmed = typeof raw === 'string' ? raw.trim() : raw;
+            const parsed = trimmed === '' ? Number.NaN : Number(trimmed);
+            if (key === 'recentFixedExcludeCount' && (!Number.isFinite(parsed) || parsed < 0)) {
+                const fallback = getDefaultRecentFixedExcludeCount();
+                form.recentFixedExcludeCount = Number.isFinite(parsed) ? Math.floor(parsed) : 0;
+                toast.warning(`固定排除必须是非负整数，已重置为默认值 ${fallback}。`);
+                form.recentFixedExcludeCount = fallback;
+                const result = updateGlobalVectorMemoryConfigFields_ACU({
+                    recentFixedExcludeCount: fallback,
+                });
+                if (!result.ok) {
+                    toast.error(result.message || '保存失败。');
+                    return;
+                }
+                runValidation();
+                pushSavedMessage();
+                return;
+            }
             const num = Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
             form[key] = num;
             const result = updateGlobalVectorMemoryConfigFields_ACU({ [key]: num });
@@ -145874,9 +145889,9 @@ Expected function or array of functions, received type ${typeof value}.`
             runValidation();
             pushSavedMessage();
         }
-        function previewRecentFixedInjectCount(raw) {
+        function previewRecentFixedExcludeCount(raw) {
             const value = Number(raw);
-            form.recentFixedInjectCount = Number.isFinite(value) ? Math.floor(value) : 0;
+            form.recentFixedExcludeCount = Number.isFinite(value) ? Math.floor(value) : 0;
         }
         function setMinScore(raw) {
             let num = Number(raw);
@@ -146149,7 +146164,7 @@ Expected function or array of functions, received type ${typeof value}.`
             clearIndexCache,
             deleteCurrentIndex,
             migrateLegacyIndex,
-            previewRecentFixedInjectCount,
+            previewRecentFixedExcludeCount,
             setApiField,
             setNumberField,
             setNonNegativeNumberField,
@@ -146195,7 +146210,7 @@ Expected function or array of functions, received type ${typeof value}.`
             },
             recall: {
                 title: "召回参数",
-                description: "控制纪要启用召回的条件、每次注入条数及固定注入条数。配置错误（如候选上限 < TopK）会自动纠正；建议保持「触发阈值 ≥ 最近固定 + TopK」，避免无效工作。",
+                description: "控制纪要启用召回的条件、每次召回条数及固定排除近期条数。配置错误（如候选上限 < TopK）会自动纠正；建议保持「触发阈值 > 固定排除」，避免所有纪要都被排除。",
             },
             archive: {
                 title: "归档与分块",
@@ -146334,8 +146349,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-vector-index-page[data-v-d6862d07] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-d6862d07] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-d6862d07] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-d6862d07] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-d6862d07] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-d6862d07]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-d6862d07] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-d6862d07] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-d6862d07] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-d6862d07] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__subconfig[data-v-d6862d07] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  padding-top: 8px;\n}\n.acu-v2-vector-index-page__section-title[data-v-d6862d07] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-vector-index-page__checkbox-group[data-v-d6862d07] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 16px;\n}\n.acu-v2-vector-api-form__inline-action[data-v-d6862d07] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-vector-api-form__muted[data-v-d6862d07] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-api-form__danger[data-v-d6862d07] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-danger, #ef4444);\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-d6862d07] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-d6862d07] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-d6862d07] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-d6862d07] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-d6862d07] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-d6862d07] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-diag__toolbar[data-v-d6862d07] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-vector-diag__toolbar[data-v-d6862d07] > :first-child {\r\n  flex: 1 1 280px;\n}\n.acu-v2-vector-diag__body[data-v-d6862d07] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  margin-top: 10px;\n}\n.acu-v2-vector-diag__meta[data-v-d6862d07] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px 18px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-2, var(--acu-text-1));\n}\n.acu-v2-vector-diag__warn[data-v-d6862d07] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-warning, #f59e0b) 45%, transparent);\r\n  color: var(--acu-warning, #f59e0b);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-vector-diag__block[data-v-d6862d07] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-vector-diag__query-box[data-v-d6862d07] {\r\n  margin: 0;\r\n  padding: 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent);\r\n  background: color-mix(in srgb, var(--acu-bg-2, #111) 60%, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  max-height: 220px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__items[data-v-d6862d07] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  max-height: 360px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__item[data-v-d6862d07] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-vector-diag__item-head[data-v-d6862d07] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-v2-vector-diag__kind[data-v-d6862d07] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-diag__scores[data-v-d6862d07] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-accent, #6ee7b7);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n}\n.acu-v2-vector-diag__summary[data-v-d6862d07] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-1);\r\n  line-height: 1.45;\n}\n.acu-v2-vector-diag__chunk[data-v-d6862d07] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.45;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-d6862d07");
-    var VectorIndexPage_vue_vue_type_style_index_0_scoped_d6862d07_lang = null;
+    injectSfcStyle("\n.acu-v2-vector-index-page[data-v-b07c21c2] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-b07c21c2] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-b07c21c2] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-b07c21c2] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-b07c21c2]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-b07c21c2] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-b07c21c2] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-b07c21c2] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-b07c21c2] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__subconfig[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  padding-top: 8px;\n}\n.acu-v2-vector-index-page__section-title[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-vector-index-page__checkbox-group[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 16px;\n}\n.acu-v2-vector-api-form__inline-action[data-v-b07c21c2] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-vector-api-form__muted[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-api-form__danger[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-danger, #ef4444);\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-b07c21c2] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-b07c21c2] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-b07c21c2] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-b07c21c2] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-b07c21c2] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-b07c21c2] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-diag__toolbar[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-vector-diag__toolbar[data-v-b07c21c2] > :first-child {\r\n  flex: 1 1 280px;\n}\n.acu-v2-vector-diag__body[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  margin-top: 10px;\n}\n.acu-v2-vector-diag__meta[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px 18px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-2, var(--acu-text-1));\n}\n.acu-v2-vector-diag__warn[data-v-b07c21c2] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-warning, #f59e0b) 45%, transparent);\r\n  color: var(--acu-warning, #f59e0b);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-vector-diag__block[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-vector-diag__query-box[data-v-b07c21c2] {\r\n  margin: 0;\r\n  padding: 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent);\r\n  background: color-mix(in srgb, var(--acu-bg-2, #111) 60%, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  max-height: 220px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__items[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  max-height: 360px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__item[data-v-b07c21c2] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-vector-diag__item-head[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-v2-vector-diag__kind[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-diag__scores[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-accent, #6ee7b7);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n}\n.acu-v2-vector-diag__summary[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-1);\r\n  line-height: 1.45;\n}\n.acu-v2-vector-diag__chunk[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.45;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-b07c21c2");
+    var VectorIndexPage_vue_vue_type_style_index_0_scoped_b07c21c2_lang = null;
 
     const _hoisted_1$h = { class: "acu-v2-vector-index-page" };
     const _hoisted_2$g = { class: "acu-v2-vector-index-page__panel-stack" };
@@ -146402,16 +146417,12 @@ Expected function or array of functions, received type ${typeof value}.`
     const _hoisted_36 = { class: "acu-v2-vector-index-page__section-title" };
     const _hoisted_37 = { class: "acu-v2-vector-diag__items" };
     const _hoisted_38 = { class: "acu-v2-vector-diag__item-head" };
-    const _hoisted_39 = { class: "acu-v2-vector-diag__kind" };
+    const _hoisted_39 = { class: "acu-v2-vector-diag__scores" };
     const _hoisted_40 = {
-	key: 0,
-	class: "acu-v2-vector-diag__scores"
-    };
-    const _hoisted_41 = {
 	key: 0,
 	class: "acu-v2-vector-diag__summary"
     };
-    const _hoisted_42 = {
+    const _hoisted_41 = {
 	key: 1,
 	class: "acu-v2-vector-diag__chunk"
     };
@@ -146491,8 +146502,8 @@ Expected function or array of functions, received type ${typeof value}.`
 							_: 1
 						}),
 						createBaseVNode("div", _hoisted_6$a, [createVNode($setup["AcuFormRow"], {
-							label: "共享总上限（固定 + 召回合计）",
-							hint: "例如填 40：表示「最近固定条数 + 向量召回条数」加起来最多 40 条（固定优先占位，剩余给向量）；填 0 表示不限制总和。"
+							label: "共享总上限（召回注入上限）",
+							hint: "例如填 40：表示每次向量召回注入最多不超过 40 条（取 TopK 与该上限的较小值）；填 0 表示不额外限制。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuInput"], {
 								"model-value": $setup.vector.form.summaryIndexSharedTotalLimit,
@@ -146520,22 +146531,22 @@ Expected function or array of functions, received type ${typeof value}.`
 									_: 1
 								}),
 								createVNode($setup["AcuFormRow"], {
-									label: "固定保留最新条数",
-									hint: "最新 N 条纪要必带（如设 5）；若总上限为 40，固定占 5 个名额，剩下 35 个名额给向量召回。"
+									label: "固定排除最新条数",
+									hint: "最新 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
-										"model-value": $setup.vector.form.recentFixedInjectCount,
+										"model-value": $setup.vector.form.recentFixedExcludeCount,
 										type: "number",
-										min: 1,
+										min: 0,
 										step: 1,
-										"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.vector.previewRecentFixedInjectCount($event)),
-										onChange: _cache[3] || (_cache[3] = ($event) => $setup.vector.setNumberField("recentFixedInjectCount", $event))
+										"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.vector.previewRecentFixedExcludeCount($event)),
+										onChange: _cache[3] || (_cache[3] = ($event) => $setup.vector.setNonNegativeNumberField("recentFixedExcludeCount", $event))
 									}, null, 8, ["model-value"])]),
 									_: 1
 								}),
 								createVNode($setup["AcuFormRow"], {
 									label: "向量最多召回条数（TopK）",
-									hint: "从更早历史里最多捞几条（受共享总上限扣减约束）。"
+									hint: "从排除近期后的更早历史里最多捞几条（若设了共享总上限，则不超过总上限）。"
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										"model-value": $setup.vector.form.topK,
@@ -146986,7 +146997,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					}),
 					createVNode($setup["AcuFormRow"], {
 						label: "TopK（最多召回较早历史条数）",
-						hint: "从更早历史里经向量与重排后最多捞回几条；若上方「共享总上限」大于 0（如 40），会自动减去固定条数。"
+						hint: "从排除近期后的更早历史里经向量与重排后最多捞回几条；若上方「共享总上限」大于 0（如 40），最终条数不超过该上限。"
 					}, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							"model-value": $setup.vector.form.topK,
@@ -147025,16 +147036,16 @@ Expected function or array of functions, received type ${typeof value}.`
 						_: 1
 					}),
 					createVNode($setup["AcuFormRow"], {
-						label: "固定写入（保留最新 N 条）",
-						hint: "最新的 N 条纪要无论如何都会固定保留（比如 5）；若上方设了共享总上限 40，固定先占 N 个名额。"
+						label: "固定排除（排除最新 N 条）",
+						hint: "最新的 N 条纪要不参与检索也不注入（近期的正文已在上下文里，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
 					}, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
-							"model-value": $setup.vector.form.recentFixedInjectCount,
+							"model-value": $setup.vector.form.recentFixedExcludeCount,
 							type: "number",
-							min: 1,
+							min: 0,
 							step: 1,
-							"onUpdate:modelValue": _cache[25] || (_cache[25] = ($event) => $setup.vector.previewRecentFixedInjectCount($event)),
-							onChange: _cache[26] || (_cache[26] = ($event) => $setup.vector.setNumberField("recentFixedInjectCount", $event))
+							"onUpdate:modelValue": _cache[25] || (_cache[25] = ($event) => $setup.vector.previewRecentFixedExcludeCount($event)),
+							onChange: _cache[26] || (_cache[26] = ($event) => $setup.vector.setNonNegativeNumberField("recentFixedExcludeCount", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -147243,7 +147254,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						-1
 						/* CACHED */
 					)), createTextVNode(
-						" 向量 " + toDisplayString($setup.diagData.denseCandidateCount) + " / BM25 " + toDisplayString($setup.diagData.sparseCandidateCount) + " / 融合进重排 " + toDisplayString($setup.diagData.fusionCandidateCount) + " → 注入 " + toDisplayString($setup.diagData.totalSelectedCount) + "（固定 " + toDisplayString($setup.diagData.recentFixedCount) + " + 召回 " + toDisplayString($setup.diagData.rankedCount) + "） ",
+						" 固定排除近期 " + toDisplayString($setup.diagData.recentExcludedCount) + " 条 → 向量 " + toDisplayString($setup.diagData.denseCandidateCount) + " / BM25 " + toDisplayString($setup.diagData.sparseCandidateCount) + " / 融合进重排 " + toDisplayString($setup.diagData.fusionCandidateCount) + " → 召回注入 " + toDisplayString($setup.diagData.totalSelectedCount) + " 条 ",
 						1
 						/* TEXT */
 					)])
@@ -147296,22 +147307,28 @@ Expected function or array of functions, received type ${typeof value}.`
 							class: "acu-v2-vector-diag__item"
 						}, [
 							createBaseVNode("div", _hoisted_38, [
-								createVNode($setup["AcuBadge"], { variant: item.kind === "ranked" ? "accent" : "neutral" }, {
-									default: withCtx(() => [createTextVNode(
-										toDisplayString(item.indexCode),
-										1
-										/* TEXT */
-									)]),
-									_: 2
-								}, 1032, ["variant"]),
-								createBaseVNode(
-									"span",
-									_hoisted_39,
-									toDisplayString(item.kind === "ranked" ? "向量/重排命中" : "最近固定保留"),
-									1
-									/* TEXT */
+								createVNode(
+									$setup["AcuBadge"],
+									{ variant: "accent" },
+									{
+										default: withCtx(() => [createTextVNode(
+											toDisplayString(item.indexCode),
+											1
+											/* TEXT */
+										)]),
+										_: 2
+									},
+									1024
+									/* DYNAMIC_SLOTS */
 								),
-								item.kind === "ranked" ? (openBlock(), createElementBlock("span", _hoisted_40, [
+								_cache[57] || (_cache[57] = createBaseVNode(
+									"span",
+									{ class: "acu-v2-vector-diag__kind" },
+									"向量/重排命中",
+									-1
+									/* CACHED */
+								)),
+								createBaseVNode("span", _hoisted_39, [
 									item.rerankScore !== undefined ? (openBlock(), createElementBlock(
 										Fragment,
 										{ key: 0 },
@@ -147345,16 +147362,16 @@ Expected function or array of functions, received type ${typeof value}.`
 										64
 										/* STABLE_FRAGMENT */
 									)) : createCommentVNode("v-if", true)
-								])) : createCommentVNode("v-if", true)
+								])
 							]),
 							item.summaryPreview ? (openBlock(), createElementBlock(
 								"div",
-								_hoisted_41,
+								_hoisted_40,
 								toDisplayString(item.summaryPreview),
 								1
 								/* TEXT */
 							)) : createCommentVNode("v-if", true),
-							item.matchedChunkText ? (openBlock(), createElementBlock("div", _hoisted_42, [_cache[57] || (_cache[57] = createBaseVNode(
+							item.matchedChunkText ? (openBlock(), createElementBlock("div", _hoisted_41, [_cache[58] || (_cache[58] = createBaseVNode(
 								"strong",
 								null,
 								"命中分片：",
@@ -147395,7 +147412,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		])
 	]);
     }
-    var VectorIndexPage = /*#__PURE__*/ _export_sfc(_sfc_main$h, [["render", _sfc_render$h], ["__scopeId", "data-v-d6862d07"]]);
+    var VectorIndexPage = /*#__PURE__*/ _export_sfc(_sfc_main$h, [["render", _sfc_render$h], ["__scopeId", "data-v-b07c21c2"]]);
 
     const dataMgmtCopy = {
         panels: {

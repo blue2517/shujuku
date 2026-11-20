@@ -55,7 +55,7 @@ function createConfig() {
     keywordGenerationMaxAttempts: 3,
     keywordPromptGroup: JSON.parse(JSON.stringify(defaultVectorMemoryConfig_ACU.keywordPromptGroup)),
     recallCandidateLimit: 1000,
-    recentFixedInjectCount: 50,
+    recentFixedExcludeCount: 5,
   };
 }
 
@@ -216,9 +216,9 @@ async function mountVectorIndexPage(opts: {
       sparseCandidateCount: 1,
       fusionCandidateCount: 3,
       rerankStatus: 'applied',
-      recentFixedCount: 1,
+      recentExcludedCount: 2,
       rankedCount: 1,
-      totalSelectedCount: 2,
+      totalSelectedCount: 1,
       durationMs: 42,
       updatedAt: Date.now(),
       items: [
@@ -230,12 +230,6 @@ async function mountVectorIndexPage(opts: {
           matchedChunkText: '赫敏抱着猫笼走向大礼堂楼梯口。',
           denseScore: 0.72,
           rerankScore: 0.91,
-        },
-        {
-          indexCode: 'AM0021',
-          rowKey: 'r21',
-          kind: 'recent_fixed',
-          summaryPreview: '最新剧情节点',
         },
       ],
     },
@@ -601,15 +595,15 @@ describe('VectorIndexPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('最近固定注入条数输入非正整数时显示 toast 并重置为默认值', async () => {
+  it('固定排除条数允许输入 0，输入负数时显示 toast 并重置为默认值', async () => {
     const { mount, config, saveSettings } = await mountVectorIndexPage({ devOptions: { vectorIndexAdvanced: true } });
     const alertSpy = vi.spyOn(window, 'alert');
 
     const row = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
-      .find(el => /固定写入/.test(el.textContent || ''));
+      .find(el => /固定排除/.test(el.textContent || ''));
     const input = row?.querySelector('input') as HTMLInputElement | null;
     expect(input).not.toBeNull();
-    expect(input!.min).toBe('1');
+    expect(input!.min).toBe('0');
 
     input!.value = '0';
     input!.dispatchEvent(new Event('input', { bubbles: true }));
@@ -617,11 +611,21 @@ describe('VectorIndexPage', () => {
     input!.dispatchEvent(new Event('change', { bubbles: true }));
     await nextTick();
 
+    expect(document.querySelector('.acu-v2-toast--warning')).toBeNull();
+    expect(config.recentFixedExcludeCount).toBe(0);
+    expect(input!.value).toBe('0');
+
+    input!.value = '-1';
+    input!.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+    input!.dispatchEvent(new Event('change', { bubbles: true }));
+    await nextTick();
+
     expect(alertSpy).not.toHaveBeenCalled();
     expect(document.querySelector('.acu-v2-toast--warning')?.textContent || '')
-      .toContain('固定写入必须是正整数，已重置为默认值 50。');
-    expect(config.recentFixedInjectCount).toBe(50);
-    expect(input!.value).toBe('50');
+      .toContain('固定排除必须是非负整数，已重置为默认值 5。');
+    expect(config.recentFixedExcludeCount).toBe(5);
+    expect(input!.value).toBe('5');
     expect(saveSettings).toHaveBeenCalled();
 
     mount.__resetAcuV2MountForTests();
@@ -787,6 +791,7 @@ describe('VectorIndexPage', () => {
     const text = diagPanel.textContent || '';
     expect(text).toContain('去大礼堂');
     expect(text).toContain('赫敏提醒待会儿见。');
+    expect(text).toContain('固定排除近期 2 条');
     expect(text).toContain('AM0003');
     expect(text).toContain('Rerank 0.910');
     expect(text).toContain('Embedding 0.720');

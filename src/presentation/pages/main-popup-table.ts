@@ -172,9 +172,9 @@ export function generateTableTabHTML(): string {
                                             <small class="notes">Embedding 本地预筛后保留的候选数量，也是 Rerank 的最大输入数；不能小于 TopK。</small>
                                         </div>
                                         <div class="acu-col-sm">
-                                            <label for="${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-recent-fixed-inject-count">最近固定注入条数</label>
-                                            <input type="number" id="${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-recent-fixed-inject-count" min="0" step="1" placeholder="50">
-                                            <small class="notes">最近 X 条纪要固定注入，不参与排序；X 计入触发阈值但不计入 TopK。例如阈值200、X=50，则最近50条固定注入，较早的行参与向量召回。</small>
+                                            <label for="${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-recent-fixed-inject-count">最近固定排除条数</label>
+                                            <input type="number" id="${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-recent-fixed-inject-count" min="0" step="1" placeholder="5">
+                                            <small class="notes">最近 X 条纪要固定排除，不参与检索也不注入（近期正文已在上下文中，填 0 表示不排除）。例如阈值200、X=5，则排除最近5条，其余较早的行参与向量召回。</small>
                                         </div>
                                         <div class="acu-col-sm">
                                             <label for="${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-rolling-delta-enabled" style="display: flex; align-items: center; gap: 8px; cursor: not-allowed;">

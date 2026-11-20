@@ -131,6 +131,10 @@ export async function bindWorldbookEvents_ACU(): Promise<void> {
           const parsed = Number.parseInt(String(rawValue ?? '').trim(), 10);
           return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackValue;
       };
+      const parseNonNegativeIntegerField_ACU = (rawValue: any, fallbackValue: number) => {
+          const parsed = Number.parseInt(String(rawValue ?? '').trim(), 10);
+          return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallbackValue;
+      };
       const parseFloatField_ACU = (rawValue: any, fallbackValue: number) => {
           const parsed = Number.parseFloat(String(rawValue ?? '').trim());
           return Number.isFinite(parsed) ? parsed : fallbackValue;
@@ -265,7 +269,7 @@ export async function bindWorldbookEvents_ACU(): Promise<void> {
       });
       bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-recent-fixed-inject-count`, 'input change', ($input) => {
           const defaults = getDefaultVectorMemoryConfig_ACU();
-          updateVectorMemoryField_ACU('recentFixedInjectCount', parseIntegerField_ACU($input.val(), (defaults as any).recentFixedInjectCount || 50));
+          updateVectorMemoryField_ACU('recentFixedExcludeCount', parseNonNegativeIntegerField_ACU($input.val(), (defaults as any).recentFixedExcludeCount ?? 5));
       });
       bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-rolling-delta-enabled`, 'change', ($input) => {
           updateVectorMemoryField_ACU('summaryIndexRollingDeltaEnabled', $input.is(':checked'));
