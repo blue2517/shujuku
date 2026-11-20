@@ -14,7 +14,6 @@ const legacyImportDirectionAllowlist = new Set([
   'src/data/storage/vector-index-hot-cache.ts',
   'src/data/storage/vector-index-st-files-storage.ts',
   'src/data/storage/vector-index-temp-cache.ts',
-  'src/presentation/pages/popup-bindings-data.ts',
   'src/presentation/pages/popup-bindings-worldbook.ts',
 ]);
 
