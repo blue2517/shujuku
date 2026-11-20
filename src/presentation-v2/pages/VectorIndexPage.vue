@@ -52,58 +52,47 @@
               </div>
             </AcuFormRow>
 
-            <div class="acu-v2-vector-index-page__number-grid">
+            <div
+              v-if="!devOptions.vectorIndexAdvanced.value"
+              class="acu-v2-vector-index-page__number-grid"
+            >
               <AcuFormRow
-                label="共享总上限（召回注入上限）"
-                hint="例如填 40：表示每次向量召回注入最多不超过 40 条（取 TopK 与该上限的较小值）；填 0 表示不额外限制。"
+                label="启用向量最少纪要数"
+                hint="纪要达到该行数才开启向量初筛（小聊天想立刻测试可设 1～20）。"
               >
                 <AcuInput
-                  :model-value="vector.form.summaryIndexSharedTotalLimit"
+                  :model-value="vector.form.summaryIndexKeywordMinRows"
+                  type="number"
+                  :min="1"
+                  :step="1"
+                  @change="vector.setNumberField('summaryIndexKeywordMinRows', $event)"
+                />
+              </AcuFormRow>
+              <AcuFormRow
+                label="固定排除最新条数"
+                hint="最新 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
+              >
+                <AcuInput
+                  :model-value="vector.form.recentFixedExcludeCount"
                   type="number"
                   :min="0"
                   :step="1"
-                  @change="vector.setNonNegativeNumberField('summaryIndexSharedTotalLimit', $event)"
+                  @update:model-value="vector.previewRecentFixedExcludeCount($event)"
+                  @change="vector.setNonNegativeNumberField('recentFixedExcludeCount', $event)"
                 />
               </AcuFormRow>
-              <template v-if="!devOptions.vectorIndexAdvanced.value">
-                <AcuFormRow
-                  label="启用向量最少纪要数"
-                  hint="纪要达到该行数才开启向量初筛（小聊天想立刻测试可设 1～20）。"
-                >
-                  <AcuInput
-                    :model-value="vector.form.summaryIndexKeywordMinRows"
-                    type="number"
-                    :min="1"
-                    :step="1"
-                    @change="vector.setNumberField('summaryIndexKeywordMinRows', $event)"
-                  />
-                </AcuFormRow>
-                <AcuFormRow
-                  label="固定排除最新条数"
-                  hint="最新 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
-                >
-                  <AcuInput
-                    :model-value="vector.form.recentFixedExcludeCount"
-                    type="number"
-                    :min="0"
-                    :step="1"
-                    @update:model-value="vector.previewRecentFixedExcludeCount($event)"
-                    @change="vector.setNonNegativeNumberField('recentFixedExcludeCount', $event)"
-                  />
-                </AcuFormRow>
-                <AcuFormRow
-                  label="向量最多召回条数（TopK）"
-                  hint="从排除近期后的更早历史里最多捞几条（若设了共享总上限，则不超过总上限）。"
-                >
-                  <AcuInput
-                    :model-value="vector.form.topK"
-                    type="number"
-                    :min="1"
-                    :step="1"
-                    @change="vector.setNumberField('topK', $event)"
-                  />
-                </AcuFormRow>
-              </template>
+              <AcuFormRow
+                label="向量最多召回条数（TopK）"
+                hint="从排除近期后的更早历史里最多捞几条。"
+              >
+                <AcuInput
+                  :model-value="vector.form.topK"
+                  type="number"
+                  :min="1"
+                  :step="1"
+                  @change="vector.setNumberField('topK', $event)"
+                />
+              </AcuFormRow>
             </div>
           </div>
 
@@ -431,7 +420,7 @@
           </AcuFormRow>
           <AcuFormRow
             label="TopK（最多召回较早历史条数）"
-            hint="从排除近期后的更早历史里经向量与重排后最多捞回几条；若上方「共享总上限」大于 0（如 40），最终条数不超过该上限。"
+            hint="从排除近期后的更早历史里经向量与重排后最多捞回几条。"
           >
             <AcuInput
               :model-value="vector.form.topK"

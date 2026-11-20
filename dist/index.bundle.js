@@ -4073,7 +4073,6 @@ $CONTENT
         summaryPromptGroupId: 'remote-memory-archive-default',
         archiveWithoutSummary: false,
         recentFixedExcludeCount: 5,
-        summaryIndexSharedTotalLimit: 0,
         summaryIndexVectorColumns: [],
         summaryIndexPlotInjectColumns: [],
         keywordGenerationEnabled: true,
@@ -85257,7 +85256,6 @@ $CONTENT
             keywordPromptGroup: normalizeKeywordPromptGroup_ACU(source.keywordPromptGroup, defaults.keywordPromptGroup),
             recallCandidateLimit: normalizePositiveInteger_ACU$1(source.recallCandidateLimit, defaults.recallCandidateLimit),
             recentFixedExcludeCount: normalizeNonNegativeIntegerLocal_ACU(source.recentFixedExcludeCount, Number(defaults.recentFixedExcludeCount ?? 5)),
-            summaryIndexSharedTotalLimit: normalizeNonNegativeIntegerLocal_ACU(source.summaryIndexSharedTotalLimit, Number(defaults.summaryIndexSharedTotalLimit) || 0),
             summaryIndexVectorColumns: normalizeColumnNameList_ACU(source.summaryIndexVectorColumns),
             summaryIndexPlotInjectColumns: normalizeColumnNameList_ACU(source.summaryIndexPlotInjectColumns),
             keywordGenerationEnabled: source.keywordGenerationEnabled !== false,
@@ -85435,7 +85433,6 @@ $CONTENT
             summaryIndexHybridRetrievalEnabled: config.hybridRetrievalEnabled !== false,
             summaryIndexBm25CandidateLimit: bm25CandidateLimit,
             summaryIndexRrfK: rrfK,
-            summaryIndexSharedTotalLimit: normalizeNonNegativeIntegerLocal_ACU(config.summaryIndexSharedTotalLimit, Number(defaults.summaryIndexSharedTotalLimit) || 0),
             summaryIndexVectorColumns: normalizeColumnNameList_ACU(config.summaryIndexVectorColumns),
             summaryIndexPlotInjectColumns: normalizeColumnNameList_ACU(config.summaryIndexPlotInjectColumns),
             keywordGenerationEnabled: config.keywordGenerationEnabled !== false,
@@ -103364,16 +103361,13 @@ $CONTENT
             chatKey: String(state.manifest?.chatKey || ''),
             isolationKey: normalizeSummaryVectorIsolationKey_ACU(latestLayer?.isolationKey ?? state.manifest?.isolationKey),
         };
-        // ── 固定排除最近 X 条（近期正文已在上下文中，不参与检索也不注入） + 召回总上限配额 ──
-        const sharedTotalLimit = Math.max(0, Math.floor(Number(config.summaryIndexSharedTotalLimit) || 0));
+        // ── 固定排除最近 X 条（近期正文已在上下文中，不参与检索也不注入） + TopK 召回上限 ──
         const rawRecentExcludeCount = Math.max(0, Math.floor(Number(config.summaryIndexRecentFixedExcludeCount) || 0));
         const recentExcludedCount = Math.min(rawRecentExcludeCount, rows.length);
         const rowsSortedByOrderDesc = [...rows].sort((left, right) => (Number(right.rowOrder) || 0) - (Number(left.rowOrder) || 0));
         const recentExcludedRows = rowsSortedByOrderDesc.slice(0, recentExcludedCount);
         const recentExcludedRowKeys = new Set(recentExcludedRows.map((row) => row.rowKey));
-        const effectiveVectorTopK = sharedTotalLimit > 0
-            ? Math.min(config.topK, sharedTotalLimit)
-            : config.topK;
+        const effectiveVectorTopK = config.topK;
         // 较早的历史行（排除最近 N 条后的候选池）
         const olderRows = rows.filter((row) => !recentExcludedRowKeys.has(row.rowKey));
         if (olderRows.length === 0) {
@@ -145601,7 +145595,6 @@ Expected function or array of functions, received type ${typeof value}.`
             minScore: defaults.minScore,
             recallCandidateLimit: defaults.recallCandidateLimit,
             recentFixedExcludeCount: getDefaultRecentFixedExcludeCount(),
-            summaryIndexSharedTotalLimit: defaults.summaryIndexSharedTotalLimit ?? 0,
             summaryIndexVectorColumns: Array.isArray(defaults.summaryIndexVectorColumns) ? [...defaults.summaryIndexVectorColumns] : [],
             summaryIndexPlotInjectColumns: Array.isArray(defaults.summaryIndexPlotInjectColumns) ? [...defaults.summaryIndexPlotInjectColumns] : [],
             vectorNamespace: defaults.vectorNamespace || 'chat',
@@ -145699,7 +145692,6 @@ Expected function or array of functions, received type ${typeof value}.`
             form.recentFixedExcludeCount = Number.isFinite(Number(config.recentFixedExcludeCount)) && Number(config.recentFixedExcludeCount) >= 0
                 ? Math.floor(Number(config.recentFixedExcludeCount))
                 : getDefaultRecentFixedExcludeCount();
-            form.summaryIndexSharedTotalLimit = Number(config.summaryIndexSharedTotalLimit) || 0;
             form.summaryIndexVectorColumns = Array.isArray(config.summaryIndexVectorColumns)
                 ? [...config.summaryIndexVectorColumns]
                 : [];
@@ -146349,15 +146341,18 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-vector-index-page[data-v-b07c21c2] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-b07c21c2] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-b07c21c2] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-b07c21c2] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-b07c21c2]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-b07c21c2] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-b07c21c2] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-b07c21c2] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-b07c21c2] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__subconfig[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  padding-top: 8px;\n}\n.acu-v2-vector-index-page__section-title[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-vector-index-page__checkbox-group[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 16px;\n}\n.acu-v2-vector-api-form__inline-action[data-v-b07c21c2] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-vector-api-form__muted[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-api-form__danger[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-danger, #ef4444);\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-b07c21c2] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-b07c21c2] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-b07c21c2] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-b07c21c2] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-b07c21c2] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-b07c21c2] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-diag__toolbar[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-vector-diag__toolbar[data-v-b07c21c2] > :first-child {\r\n  flex: 1 1 280px;\n}\n.acu-v2-vector-diag__body[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  margin-top: 10px;\n}\n.acu-v2-vector-diag__meta[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px 18px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-2, var(--acu-text-1));\n}\n.acu-v2-vector-diag__warn[data-v-b07c21c2] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-warning, #f59e0b) 45%, transparent);\r\n  color: var(--acu-warning, #f59e0b);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-vector-diag__block[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-vector-diag__query-box[data-v-b07c21c2] {\r\n  margin: 0;\r\n  padding: 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent);\r\n  background: color-mix(in srgb, var(--acu-bg-2, #111) 60%, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  max-height: 220px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__items[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  max-height: 360px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__item[data-v-b07c21c2] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-vector-diag__item-head[data-v-b07c21c2] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-v2-vector-diag__kind[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-diag__scores[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-accent, #6ee7b7);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n}\n.acu-v2-vector-diag__summary[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-1);\r\n  line-height: 1.45;\n}\n.acu-v2-vector-diag__chunk[data-v-b07c21c2] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.45;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-b07c21c2");
-    var VectorIndexPage_vue_vue_type_style_index_0_scoped_b07c21c2_lang = null;
+    injectSfcStyle("\n.acu-v2-vector-index-page[data-v-3a8ac2f1] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-3a8ac2f1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-3a8ac2f1] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-3a8ac2f1] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-3a8ac2f1]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-3a8ac2f1] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-3a8ac2f1] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-3a8ac2f1] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__subconfig[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  padding-top: 8px;\n}\n.acu-v2-vector-index-page__section-title[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-vector-index-page__checkbox-group[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 16px;\n}\n.acu-v2-vector-api-form__inline-action[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-vector-api-form__muted[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-api-form__danger[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-danger, #ef4444);\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-3a8ac2f1] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-3a8ac2f1] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-3a8ac2f1] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-3a8ac2f1] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-diag__toolbar[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-vector-diag__toolbar[data-v-3a8ac2f1] > :first-child {\r\n  flex: 1 1 280px;\n}\n.acu-v2-vector-diag__body[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  margin-top: 10px;\n}\n.acu-v2-vector-diag__meta[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px 18px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-2, var(--acu-text-1));\n}\n.acu-v2-vector-diag__warn[data-v-3a8ac2f1] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-warning, #f59e0b) 45%, transparent);\r\n  color: var(--acu-warning, #f59e0b);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-vector-diag__block[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-vector-diag__query-box[data-v-3a8ac2f1] {\r\n  margin: 0;\r\n  padding: 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent);\r\n  background: color-mix(in srgb, var(--acu-bg-2, #111) 60%, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  max-height: 220px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__items[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  max-height: 360px;\r\n  overflow-y: auto;\n}\n.acu-v2-vector-diag__item[data-v-3a8ac2f1] {\r\n  padding: 8px 10px;\r\n  border-radius: 4px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-vector-diag__item-head[data-v-3a8ac2f1] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  align-items: center;\r\n  gap: 8px;\n}\n.acu-v2-vector-diag__kind[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-vector-diag__scores[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-accent, #6ee7b7);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n}\n.acu-v2-vector-diag__summary[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-1);\r\n  line-height: 1.45;\n}\n.acu-v2-vector-diag__chunk[data-v-3a8ac2f1] {\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.45;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-3a8ac2f1");
+    var VectorIndexPage_vue_vue_type_style_index_0_scoped_3a8ac2f1_lang = null;
 
     const _hoisted_1$h = { class: "acu-v2-vector-index-page" };
     const _hoisted_2$g = { class: "acu-v2-vector-index-page__panel-stack" };
     const _hoisted_3$f = { class: "acu-v2-vector-index-page__subconfig" };
     const _hoisted_4$c = { class: "acu-v2-vector-index-page__checkbox-group" };
     const _hoisted_5$b = { class: "acu-v2-vector-index-page__checkbox-group" };
-    const _hoisted_6$a = { class: "acu-v2-vector-index-page__number-grid" };
+    const _hoisted_6$a = {
+	key: 0,
+	class: "acu-v2-vector-index-page__number-grid"
+    };
     const _hoisted_7$8 = { class: "acu-v2-vector-index-page__actions" };
     const _hoisted_8$8 = { class: "acu-v2-vector-index-page__subconfig" };
     const _hoisted_9$7 = ["value"];
@@ -146445,7 +146440,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				}, 8, ["variant"])]),
 				default: withCtx(() => [
 					createVNode($setup["AcuStatsList"], { items: $setup.vector.statusStatsItems.value }, null, 8, ["items"]),
-					_cache[40] || (_cache[40] = createBaseVNode(
+					_cache[39] || (_cache[39] = createBaseVNode(
 						"p",
 						{ class: "acu-v2-vector-index-page__hint" },
 						" 流程：先按「被向量化的列」建库并初筛出编码 → 再按「推进 AI 注入列」只把命中编码的这些列喂给剧情推进 AI（主模型世界书不被长正文污染）。 ",
@@ -146501,68 +146496,50 @@ Expected function or array of functions, received type ${typeof value}.`
 							))])]),
 							_: 1
 						}),
-						createBaseVNode("div", _hoisted_6$a, [createVNode($setup["AcuFormRow"], {
-							label: "共享总上限（召回注入上限）",
-							hint: "例如填 40：表示每次向量召回注入最多不超过 40 条（取 TopK 与该上限的较小值）；填 0 表示不额外限制。"
-						}, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								"model-value": $setup.vector.form.summaryIndexSharedTotalLimit,
-								type: "number",
-								min: 0,
-								step: 1,
-								onChange: _cache[0] || (_cache[0] = ($event) => $setup.vector.setNonNegativeNumberField("summaryIndexSharedTotalLimit", $event))
-							}, null, 8, ["model-value"])]),
-							_: 1
-						}), !$setup.devOptions.vectorIndexAdvanced.value ? (openBlock(), createElementBlock(
-							Fragment,
-							{ key: 0 },
-							[
-								createVNode($setup["AcuFormRow"], {
-									label: "启用向量最少纪要数",
-									hint: "纪要达到该行数才开启向量初筛（小聊天想立刻测试可设 1～20）。"
-								}, {
-									default: withCtx(() => [createVNode($setup["AcuInput"], {
-										"model-value": $setup.vector.form.summaryIndexKeywordMinRows,
-										type: "number",
-										min: 1,
-										step: 1,
-										onChange: _cache[1] || (_cache[1] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
-									}, null, 8, ["model-value"])]),
-									_: 1
-								}),
-								createVNode($setup["AcuFormRow"], {
-									label: "固定排除最新条数",
-									hint: "最新 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
-								}, {
-									default: withCtx(() => [createVNode($setup["AcuInput"], {
-										"model-value": $setup.vector.form.recentFixedExcludeCount,
-										type: "number",
-										min: 0,
-										step: 1,
-										"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.vector.previewRecentFixedExcludeCount($event)),
-										onChange: _cache[3] || (_cache[3] = ($event) => $setup.vector.setNonNegativeNumberField("recentFixedExcludeCount", $event))
-									}, null, 8, ["model-value"])]),
-									_: 1
-								}),
-								createVNode($setup["AcuFormRow"], {
-									label: "向量最多召回条数（TopK）",
-									hint: "从排除近期后的更早历史里最多捞几条（若设了共享总上限，则不超过总上限）。"
-								}, {
-									default: withCtx(() => [createVNode($setup["AcuInput"], {
-										"model-value": $setup.vector.form.topK,
-										type: "number",
-										min: 1,
-										step: 1,
-										onChange: _cache[4] || (_cache[4] = ($event) => $setup.vector.setNumberField("topK", $event))
-									}, null, 8, ["model-value"])]),
-									_: 1
-								})
-							],
-							64
-							/* STABLE_FRAGMENT */
-						)) : createCommentVNode("v-if", true)])
+						!$setup.devOptions.vectorIndexAdvanced.value ? (openBlock(), createElementBlock("div", _hoisted_6$a, [
+							createVNode($setup["AcuFormRow"], {
+								label: "启用向量最少纪要数",
+								hint: "纪要达到该行数才开启向量初筛（小聊天想立刻测试可设 1～20）。"
+							}, {
+								default: withCtx(() => [createVNode($setup["AcuInput"], {
+									"model-value": $setup.vector.form.summaryIndexKeywordMinRows,
+									type: "number",
+									min: 1,
+									step: 1,
+									onChange: _cache[0] || (_cache[0] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
+								}, null, 8, ["model-value"])]),
+								_: 1
+							}),
+							createVNode($setup["AcuFormRow"], {
+								label: "固定排除最新条数",
+								hint: "最新 N 条纪要直接排除，不参与检索也不注入（近期正文已在上下文中，如设 5）；未达向量阈值时，本地直出与发给推进 AI 的纪要同样排除最新 N 条；填 0 表示不排除。"
+							}, {
+								default: withCtx(() => [createVNode($setup["AcuInput"], {
+									"model-value": $setup.vector.form.recentFixedExcludeCount,
+									type: "number",
+									min: 0,
+									step: 1,
+									"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.vector.previewRecentFixedExcludeCount($event)),
+									onChange: _cache[2] || (_cache[2] = ($event) => $setup.vector.setNonNegativeNumberField("recentFixedExcludeCount", $event))
+								}, null, 8, ["model-value"])]),
+								_: 1
+							}),
+							createVNode($setup["AcuFormRow"], {
+								label: "向量最多召回条数（TopK）",
+								hint: "从排除近期后的更早历史里最多捞几条。"
+							}, {
+								default: withCtx(() => [createVNode($setup["AcuInput"], {
+									"model-value": $setup.vector.form.topK,
+									type: "number",
+									min: 1,
+									step: 1,
+									onChange: _cache[3] || (_cache[3] = ($event) => $setup.vector.setNumberField("topK", $event))
+								}, null, 8, ["model-value"])]),
+								_: 1
+							})
+						])) : createCommentVNode("v-if", true)
 					]),
-					_cache[41] || (_cache[41] = createBaseVNode(
+					_cache[40] || (_cache[40] = createBaseVNode(
 						"div",
 						{
 							class: "acu-v2-vector-index-page__maintenance-spacer",
@@ -146578,7 +146555,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							disabled: $setup.vector.buildBusy.value || $setup.vector.maintenanceBusy.value,
 							onClick: $setup.vector.buildNow
 						}, {
-							default: withCtx(() => [_cache[36] || (_cache[36] = createBaseVNode(
+							default: withCtx(() => [_cache[35] || (_cache[35] = createBaseVNode(
 								"i",
 								{ class: "fa-solid fa-brain" },
 								null,
@@ -146596,7 +146573,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							disabled: $setup.vector.maintenanceBusy.value || $setup.vector.buildBusy.value,
 							onClick: $setup.vector.migrateLegacyIndex
 						}, {
-							default: withCtx(() => [..._cache[37] || (_cache[37] = [createTextVNode(
+							default: withCtx(() => [..._cache[36] || (_cache[36] = [createTextVNode(
 								" 非破坏迁移旧索引 ",
 								-1
 								/* CACHED */
@@ -146607,7 +146584,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							disabled: $setup.vector.maintenanceBusy.value || $setup.vector.buildBusy.value,
 							onClick: $setup.vector.clearIndexCache
 						}, {
-							default: withCtx(() => [..._cache[38] || (_cache[38] = [createTextVNode(
+							default: withCtx(() => [..._cache[37] || (_cache[37] = [createTextVNode(
 								" 清空临时缓存 ",
 								-1
 								/* CACHED */
@@ -146619,7 +146596,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							disabled: $setup.vector.maintenanceBusy.value || $setup.vector.buildBusy.value,
 							onClick: $setup.onDeleteCurrentIndex
 						}, {
-							default: withCtx(() => [..._cache[39] || (_cache[39] = [createTextVNode(
+							default: withCtx(() => [..._cache[38] || (_cache[38] = [createTextVNode(
 								" 删除当前索引 ",
 								-1
 								/* CACHED */
@@ -146636,7 +146613,7 @@ Expected function or array of functions, received type ${typeof value}.`
 			}, {
 				default: withCtx(() => [
 					createBaseVNode("div", _hoisted_8$8, [
-						_cache[42] || (_cache[42] = createBaseVNode(
+						_cache[41] || (_cache[41] = createBaseVNode(
 							"div",
 							{ class: "acu-v2-vector-index-page__section-title" },
 							"标签清洗与字数截取（构造检索文本前生效）",
@@ -146652,7 +146629,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								class: "acu-v2-vector-api-form__instruction-textarea",
 								rows: "2",
 								placeholder: "例如：标签触发, summary, thinking, options",
-								onChange: _cache[5] || (_cache[5] = ($event) => $setup.vector.setApiField("queryStripTags", $event.target.value))
+								onChange: _cache[4] || (_cache[4] = ($event) => $setup.vector.setApiField("queryStripTags", $event.target.value))
 							}, null, 40, _hoisted_9$7)]),
 							_: 1
 						}),
@@ -146665,7 +146642,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 50,
-								onChange: _cache[6] || (_cache[6] = ($event) => $setup.vector.setNumberField("queryTailCharLimit", $event))
+								onChange: _cache[5] || (_cache[5] = ($event) => $setup.vector.setNumberField("queryTailCharLimit", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						})
@@ -146677,7 +146654,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						default: withCtx(() => [createVNode($setup["AcuToggle"], {
 							"model-value": $setup.vector.form.keywordGenerationEnabled,
 							label: "发送前调用 AI 生成检索关键词",
-							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.vector.setBooleanField("keywordGenerationEnabled", $event))
+							"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.vector.setBooleanField("keywordGenerationEnabled", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -146692,7 +146669,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								options: $setup.keywordApiOptions,
 								"model-value": $setup.vector.form.keywordApiPreset,
 								placeholder: $setup.followActiveApiLabel,
-								"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.vector.setApiField("keywordApiPreset", $event))
+								"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.vector.setApiField("keywordApiPreset", $event))
 							}, null, 8, [
 								"options",
 								"model-value",
@@ -146708,7 +146685,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[9] || (_cache[9] = ($event) => $setup.vector.setNumberField("keywordContextPairCount", $event))
+								onChange: _cache[8] || (_cache[8] = ($event) => $setup.vector.setNumberField("keywordContextPairCount", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}), createVNode($setup["AcuFormRow"], {
@@ -146720,7 +146697,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[10] || (_cache[10] = ($event) => $setup.vector.setNumberField("keywordGenerationMaxAttempts", $event))
+								onChange: _cache[9] || (_cache[9] = ($event) => $setup.vector.setNumberField("keywordGenerationMaxAttempts", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						})])],
@@ -146742,7 +146719,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					},
 					[
 						createBaseVNode("fieldset", _hoisted_12$7, [
-							_cache[44] || (_cache[44] = createBaseVNode(
+							_cache[43] || (_cache[43] = createBaseVNode(
 								"legend",
 								null,
 								"Embedding",
@@ -146755,7 +146732,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							}, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.embeddingEndpoint,
-									"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.vectorApiConfig.form.embeddingEndpoint = $event),
+									"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.vectorApiConfig.form.embeddingEndpoint = $event),
 									type: "text",
 									placeholder: "https://example.com/v1/embeddings"
 								}, null, 8, ["modelValue"])]),
@@ -146764,7 +146741,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							createVNode($setup["AcuFormRow"], { label: "模型名" }, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.embeddingModel,
-									"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.vectorApiConfig.form.embeddingModel = $event),
+									"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.vectorApiConfig.form.embeddingModel = $event),
 									type: "text",
 									placeholder: "BAAI/bge-m3"
 								}, null, 8, ["modelValue"])]),
@@ -146773,7 +146750,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							createVNode($setup["AcuFormRow"], { label: "API 密钥" }, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.embeddingApiKey,
-									"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.vectorApiConfig.form.embeddingApiKey = $event),
+									"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.vectorApiConfig.form.embeddingApiKey = $event),
 									type: "password",
 									autocomplete: "off"
 								}, null, 8, ["modelValue"])]),
@@ -146784,7 +146761,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								disabled: $setup.vectorApiConfig.embeddingModelLoadStatus.value === "loading",
 								onClick: $setup.vectorApiConfig.loadEmbeddingModels
 							}, {
-								default: withCtx(() => [..._cache[43] || (_cache[43] = [createTextVNode(
+								default: withCtx(() => [..._cache[42] || (_cache[42] = [createTextVNode(
 									" 加载模型 ",
 									-1
 									/* CACHED */
@@ -146805,13 +146782,13 @@ Expected function or array of functions, received type ${typeof value}.`
 									options: $setup.embeddingModelOptions,
 									"model-value": $setup.vectorApiConfig.form.embeddingModel,
 									placeholder: "请选择模型",
-									"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.vectorApiConfig.form.embeddingModel = $event)
+									"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.vectorApiConfig.form.embeddingModel = $event)
 								}, null, 8, ["options", "model-value"])]),
 								_: 1
 							})) : createCommentVNode("v-if", true)
 						]),
 						createBaseVNode("fieldset", _hoisted_16$6, [
-							_cache[46] || (_cache[46] = createBaseVNode(
+							_cache[45] || (_cache[45] = createBaseVNode(
 								"legend",
 								null,
 								"Rerank",
@@ -146824,7 +146801,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							}, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.rerankEndpoint,
-									"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.vectorApiConfig.form.rerankEndpoint = $event),
+									"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.vectorApiConfig.form.rerankEndpoint = $event),
 									type: "text",
 									placeholder: "https://example.com/v1/rerank"
 								}, null, 8, ["modelValue"])]),
@@ -146833,7 +146810,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							createVNode($setup["AcuFormRow"], { label: "模型名" }, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.rerankModel,
-									"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.vectorApiConfig.form.rerankModel = $event),
+									"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.vectorApiConfig.form.rerankModel = $event),
 									type: "text",
 									placeholder: "BAAI/bge-reranker-v2-m3"
 								}, null, 8, ["modelValue"])]),
@@ -146842,7 +146819,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							createVNode($setup["AcuFormRow"], { label: "API 密钥" }, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.vectorApiConfig.form.rerankApiKey,
-									"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.vectorApiConfig.form.rerankApiKey = $event),
+									"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.vectorApiConfig.form.rerankApiKey = $event),
 									type: "password",
 									autocomplete: "off"
 								}, null, 8, ["modelValue"])]),
@@ -146853,7 +146830,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								disabled: $setup.vectorApiConfig.rerankModelLoadStatus.value === "loading",
 								onClick: $setup.vectorApiConfig.loadRerankModels
 							}, {
-								default: withCtx(() => [..._cache[45] || (_cache[45] = [createTextVNode(
+								default: withCtx(() => [..._cache[44] || (_cache[44] = [createTextVNode(
 									" 加载模型 ",
 									-1
 									/* CACHED */
@@ -146874,7 +146851,7 @@ Expected function or array of functions, received type ${typeof value}.`
 									options: $setup.rerankModelOptions,
 									"model-value": $setup.vectorApiConfig.form.rerankModel,
 									placeholder: "请选择模型",
-									"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.vectorApiConfig.form.rerankModel = $event)
+									"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.vectorApiConfig.form.rerankModel = $event)
 								}, null, 8, ["options", "model-value"])]),
 								_: 1
 							})) : createCommentVNode("v-if", true),
@@ -146885,7 +146862,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								default: withCtx(() => [withDirectives(createBaseVNode(
 									"textarea",
 									{
-										"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.vectorApiConfig.form.rerankInstruction = $event),
+										"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.vectorApiConfig.form.rerankInstruction = $event),
 										class: "acu-v2-vector-api-form__instruction-textarea",
 										rows: "3",
 										placeholder: "留空则不发送 instruction"
@@ -146922,7 +146899,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							variant: "primary",
 							"native-type": "submit"
 						}, {
-							default: withCtx(() => [..._cache[47] || (_cache[47] = [createTextVNode(
+							default: withCtx(() => [..._cache[46] || (_cache[46] = [createTextVNode(
 								"保存",
 								-1
 								/* CACHED */
@@ -146951,7 +146928,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					key: 0,
 					kind: "warning"
 				}, {
-					default: withCtx(() => [..._cache[48] || (_cache[48] = [createTextVNode(
+					default: withCtx(() => [..._cache[47] || (_cache[47] = [createTextVNode(
 						" 关键词生成提示词为空，发送前会直接用用户输入参与召回；建议载入默认提示词后保存。 ",
 						-1
 						/* CACHED */
@@ -146959,9 +146936,9 @@ Expected function or array of functions, received type ${typeof value}.`
 					_: 1
 				})) : createCommentVNode("v-if", true), createBaseVNode("div", _hoisted_21$5, [createVNode($setup["AcuButton"], {
 					variant: "primary",
-					onClick: _cache[20] || (_cache[20] = ($event) => $setup.promptDrawerOpen = true)
+					onClick: _cache[19] || (_cache[19] = ($event) => $setup.promptDrawerOpen = true)
 				}, {
-					default: withCtx(() => [..._cache[49] || (_cache[49] = [createTextVNode(
+					default: withCtx(() => [..._cache[48] || (_cache[48] = [createTextVNode(
 						"编辑提示词",
 						-1
 						/* CACHED */
@@ -146991,20 +146968,20 @@ Expected function or array of functions, received type ${typeof value}.`
 							type: "number",
 							min: 1,
 							step: 1,
-							onChange: _cache[21] || (_cache[21] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
+							onChange: _cache[20] || (_cache[20] = ($event) => $setup.vector.setNumberField("summaryIndexKeywordMinRows", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
 					createVNode($setup["AcuFormRow"], {
 						label: "TopK（最多召回较早历史条数）",
-						hint: "从排除近期后的更早历史里经向量与重排后最多捞回几条；若上方「共享总上限」大于 0（如 40），最终条数不超过该上限。"
+						hint: "从排除近期后的更早历史里经向量与重排后最多捞回几条。"
 					}, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							"model-value": $setup.vector.form.topK,
 							type: "number",
 							min: 1,
 							step: 1,
-							onChange: _cache[22] || (_cache[22] = ($event) => $setup.vector.setNumberField("topK", $event))
+							onChange: _cache[21] || (_cache[21] = ($event) => $setup.vector.setNumberField("topK", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -147018,7 +146995,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							min: 0,
 							max: 1,
 							step: .01,
-							onChange: _cache[23] || (_cache[23] = ($event) => $setup.vector.setMinScore($event))
+							onChange: _cache[22] || (_cache[22] = ($event) => $setup.vector.setMinScore($event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -147031,7 +147008,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							type: "number",
 							min: 1,
 							step: 1,
-							onChange: _cache[24] || (_cache[24] = ($event) => $setup.vector.setNumberField("recallCandidateLimit", $event))
+							onChange: _cache[23] || (_cache[23] = ($event) => $setup.vector.setNumberField("recallCandidateLimit", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -147044,8 +147021,8 @@ Expected function or array of functions, received type ${typeof value}.`
 							type: "number",
 							min: 0,
 							step: 1,
-							"onUpdate:modelValue": _cache[25] || (_cache[25] = ($event) => $setup.vector.previewRecentFixedExcludeCount($event)),
-							onChange: _cache[26] || (_cache[26] = ($event) => $setup.vector.setNonNegativeNumberField("recentFixedExcludeCount", $event))
+							"onUpdate:modelValue": _cache[24] || (_cache[24] = ($event) => $setup.vector.previewRecentFixedExcludeCount($event)),
+							onChange: _cache[25] || (_cache[25] = ($event) => $setup.vector.setNonNegativeNumberField("recentFixedExcludeCount", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
@@ -147057,7 +147034,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							"model-value": $setup.vector.form.vectorNamespace,
 							type: "text",
 							placeholder: "chat",
-							onChange: _cache[27] || (_cache[27] = ($event) => $setup.vector.setApiField("vectorNamespace", $event))
+							onChange: _cache[26] || (_cache[26] = ($event) => $setup.vector.setApiField("vectorNamespace", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})
@@ -147079,7 +147056,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[28] || (_cache[28] = ($event) => $setup.vector.setNumberField("summaryChunkSentenceCount", $event))
+								onChange: _cache[27] || (_cache[27] = ($event) => $setup.vector.setNumberField("summaryChunkSentenceCount", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -147092,7 +147069,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								type: "number",
 								min: 1,
 								step: 1,
-								onChange: _cache[29] || (_cache[29] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveMaxConcurrency", $event))
+								onChange: _cache[28] || (_cache[28] = ($event) => $setup.vector.setNumberField("summaryIndexArchiveMaxConcurrency", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -147131,7 +147108,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						default: withCtx(() => [createVNode($setup["AcuToggle"], {
 							"model-value": $setup.vector.form.summaryIndexV2WriteEnabled,
 							label: "允许 V2 快照写入",
-							"onUpdate:modelValue": _cache[30] || (_cache[30] = ($event) => $setup.vector.setBooleanField("summaryIndexV2WriteEnabled", $event))
+							"onUpdate:modelValue": _cache[29] || (_cache[29] = ($event) => $setup.vector.setBooleanField("summaryIndexV2WriteEnabled", $event))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
@@ -147146,7 +147123,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							rows: "4",
 							spellcheck: "false",
 							placeholder: "每行一个 scope fingerprint",
-							onChange: _cache[31] || (_cache[31] = ($event) => $setup.vector.setV2WriteScopeAllowlist($event.target.value))
+							onChange: _cache[30] || (_cache[30] = ($event) => $setup.vector.setV2WriteScopeAllowlist($event.target.value))
 						}, null, 40, _hoisted_24$3)]),
 						_: 1
 					})) : createCommentVNode("v-if", true)
@@ -147174,7 +147151,7 @@ Expected function or array of functions, received type ${typeof value}.`
 			default: withCtx(() => [createBaseVNode("div", _hoisted_25$3, [
 				createVNode($setup["AcuInput"], {
 					modelValue: $setup.vector.testUserInput.value,
-					"onUpdate:modelValue": _cache[32] || (_cache[32] = ($event) => $setup.vector.testUserInput.value = $event),
+					"onUpdate:modelValue": _cache[31] || (_cache[31] = ($event) => $setup.vector.testUserInput.value = $event),
 					type: "text",
 					placeholder: "输入测试台词（留空则自动读取最近一条用户发言，搭配当前 AI 末尾句试跑）"
 				}, null, 8, ["modelValue"]),
@@ -147194,7 +147171,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					disabled: $setup.vector.testRecallBusy.value,
 					onClick: $setup.vector.refreshRecallDiagnostics
 				}, {
-					default: withCtx(() => [..._cache[50] || (_cache[50] = [createTextVNode(
+					default: withCtx(() => [..._cache[49] || (_cache[49] = [createTextVNode(
 						" 刷新记录 ",
 						-1
 						/* CACHED */
@@ -147203,7 +147180,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				}, 8, ["disabled", "onClick"])
 			]), !$setup.diagData ? (openBlock(), createElementBlock("p", _hoisted_26$3, " 暂无召回记录。你可以直接点「测试召回效果」试跑一次，或在聊天中发送一条消息后再点「刷新记录」。 ")) : (openBlock(), createElementBlock("div", _hoisted_27$3, [
 				createBaseVNode("div", _hoisted_28$2, [
-					createBaseVNode("span", null, [_cache[51] || (_cache[51] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[50] || (_cache[50] = createBaseVNode(
 						"strong",
 						null,
 						"运行方式：",
@@ -147214,7 +147191,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						1
 						/* TEXT */
 					)]),
-					createBaseVNode("span", null, [_cache[52] || (_cache[52] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[51] || (_cache[51] = createBaseVNode(
 						"strong",
 						null,
 						"构造模式：",
@@ -147225,7 +147202,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						1
 						/* TEXT */
 					)]),
-					createBaseVNode("span", null, [_cache[53] || (_cache[53] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[52] || (_cache[52] = createBaseVNode(
 						"strong",
 						null,
 						"耗时：",
@@ -147236,7 +147213,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						1
 						/* TEXT */
 					)]),
-					createBaseVNode("span", null, [_cache[54] || (_cache[54] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[53] || (_cache[53] = createBaseVNode(
 						"strong",
 						null,
 						"Rerank：",
@@ -147247,7 +147224,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						1
 						/* TEXT */
 					)]),
-					createBaseVNode("span", null, [_cache[55] || (_cache[55] = createBaseVNode(
+					createBaseVNode("span", null, [_cache[54] || (_cache[54] = createBaseVNode(
 						"strong",
 						null,
 						"候选漏斗：",
@@ -147279,7 +147256,7 @@ Expected function or array of functions, received type ${typeof value}.`
 					1
 					/* TEXT */
 				)])) : createCommentVNode("v-if", true),
-				createBaseVNode("div", _hoisted_33$1, [_cache[56] || (_cache[56] = createBaseVNode(
+				createBaseVNode("div", _hoisted_33$1, [_cache[55] || (_cache[55] = createBaseVNode(
 					"div",
 					{ class: "acu-v2-vector-index-page__section-title" },
 					"实际送入匹配的检索文本（Query Text）",
@@ -147321,7 +147298,7 @@ Expected function or array of functions, received type ${typeof value}.`
 									1024
 									/* DYNAMIC_SLOTS */
 								),
-								_cache[57] || (_cache[57] = createBaseVNode(
+								_cache[56] || (_cache[56] = createBaseVNode(
 									"span",
 									{ class: "acu-v2-vector-diag__kind" },
 									"向量/重排命中",
@@ -147371,7 +147348,7 @@ Expected function or array of functions, received type ${typeof value}.`
 								1
 								/* TEXT */
 							)) : createCommentVNode("v-if", true),
-							item.matchedChunkText ? (openBlock(), createElementBlock("div", _hoisted_41, [_cache[58] || (_cache[58] = createBaseVNode(
+							item.matchedChunkText ? (openBlock(), createElementBlock("div", _hoisted_41, [_cache[57] || (_cache[57] = createBaseVNode(
 								"strong",
 								null,
 								"命中分片：",
@@ -147396,11 +147373,11 @@ Expected function or array of functions, received type ${typeof value}.`
 			dirty: $setup.vector.promptDirty.value,
 			message: $setup.vector.message.value,
 			"role-options": $setup.ROLE_OPTIONS,
-			onClose: _cache[33] || (_cache[33] = ($event) => $setup.promptDrawerOpen = false),
+			onClose: _cache[32] || (_cache[32] = ($event) => $setup.promptDrawerOpen = false),
 			onSave: $setup.vector.savePromptGroup,
 			onReset: $setup.vector.resetPromptGroup,
-			onAdd: _cache[34] || (_cache[34] = ($event) => $setup.vector.addPromptSegment($event)),
-			onDelete: _cache[35] || (_cache[35] = ($event) => $setup.vector.deletePromptSegment($event)),
+			onAdd: _cache[33] || (_cache[33] = ($event) => $setup.vector.addPromptSegment($event)),
+			onDelete: _cache[34] || (_cache[34] = ($event) => $setup.vector.deletePromptSegment($event)),
 			onUpdate: $setup.onPromptUpdate
 		}, null, 8, [
 			"is-open",
@@ -147412,7 +147389,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		])
 	]);
     }
-    var VectorIndexPage = /*#__PURE__*/ _export_sfc(_sfc_main$h, [["render", _sfc_render$h], ["__scopeId", "data-v-b07c21c2"]]);
+    var VectorIndexPage = /*#__PURE__*/ _export_sfc(_sfc_main$h, [["render", _sfc_render$h], ["__scopeId", "data-v-3a8ac2f1"]]);
 
     const dataMgmtCopy = {
         panels: {

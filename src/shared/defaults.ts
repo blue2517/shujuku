@@ -217,7 +217,6 @@ export const defaultVectorMemoryConfig_ACU = {
   summaryPromptGroupId: 'remote-memory-archive-default',
   archiveWithoutSummary: false,
   recentFixedExcludeCount: 5,
-  summaryIndexSharedTotalLimit: 0,
   summaryIndexVectorColumns: [] as string[],
   summaryIndexPlotInjectColumns: [] as string[],
   keywordGenerationEnabled: true,

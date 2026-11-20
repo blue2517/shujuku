@@ -657,7 +657,7 @@ describe('VectorIndexPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('独立勾选被向量化列与推进 AI 注入列，并可设置共享总上限', async () => {
+  it('独立勾选被向量化列与推进 AI 注入列，且仅保留 TopK 一个召回上限入口', async () => {
     const { mount, config, saveSettings } = await mountVectorIndexPage();
 
     const vectorRow = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
@@ -677,14 +677,16 @@ describe('VectorIndexPage', () => {
     expect(config.summaryIndexVectorColumns).toEqual(['纪要']);
     expect(config.summaryIndexPlotInjectColumns).toEqual(['重要对话']);
 
-    const sharedCapRow = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
-      .find(el => el.textContent?.includes('共享总上限'))!;
-    const capInput = sharedCapRow.querySelector('input') as HTMLInputElement;
-    capInput.value = '40';
-    capInput.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(document.querySelector('.acu-v2-vector-index-page')?.textContent || '').not.toContain('共享总上限');
+    const topKRows = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
+      .filter(el => el.textContent?.includes('TopK'));
+    expect(topKRows).toHaveLength(1);
+    const topKInput = topKRows[0].querySelector('input') as HTMLInputElement;
+    topKInput.value = '40';
+    topKInput.dispatchEvent(new Event('change', { bubbles: true }));
     await nextTick();
 
-    expect(config.summaryIndexSharedTotalLimit).toBe(40);
+    expect(config.topK).toBe(40);
     expect(saveSettings).toHaveBeenCalled();
 
     mount.__resetAcuV2MountForTests();

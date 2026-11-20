@@ -83,7 +83,6 @@ export interface VectorIndexForm {
   minScore: number;
   recallCandidateLimit: number;
   recentFixedExcludeCount: number;
-  summaryIndexSharedTotalLimit: number;
   summaryIndexVectorColumns: string[];
   summaryIndexPlotInjectColumns: string[];
   vectorNamespace: string;
@@ -155,7 +154,6 @@ function createEmptyForm(): VectorIndexForm {
     minScore: defaults.minScore,
     recallCandidateLimit: defaults.recallCandidateLimit,
     recentFixedExcludeCount: getDefaultRecentFixedExcludeCount(),
-    summaryIndexSharedTotalLimit: (defaults as any).summaryIndexSharedTotalLimit ?? 0,
     summaryIndexVectorColumns: Array.isArray((defaults as any).summaryIndexVectorColumns) ? [...(defaults as any).summaryIndexVectorColumns] : [],
     summaryIndexPlotInjectColumns: Array.isArray((defaults as any).summaryIndexPlotInjectColumns) ? [...(defaults as any).summaryIndexPlotInjectColumns] : [],
     vectorNamespace: defaults.vectorNamespace || 'chat',
@@ -265,7 +263,6 @@ export function useVectorIndexConfig() {
     form.recentFixedExcludeCount = Number.isFinite(Number((config as any).recentFixedExcludeCount)) && Number((config as any).recentFixedExcludeCount) >= 0
       ? Math.floor(Number((config as any).recentFixedExcludeCount))
       : getDefaultRecentFixedExcludeCount();
-    form.summaryIndexSharedTotalLimit = Number((config as any).summaryIndexSharedTotalLimit) || 0;
     form.summaryIndexVectorColumns = Array.isArray((config as any).summaryIndexVectorColumns)
       ? [...(config as any).summaryIndexVectorColumns]
       : [];
@@ -398,7 +395,7 @@ export function useVectorIndexConfig() {
   }
 
   function setNonNegativeNumberField<
-    K extends 'summaryIndexSharedTotalLimit' | 'recentFixedExcludeCount',
+    K extends 'recentFixedExcludeCount',
   >(key: K, raw: number | string): void {
     const trimmed = typeof raw === 'string' ? raw.trim() : raw;
     const parsed = trimmed === '' ? Number.NaN : Number(trimmed);

@@ -65,7 +65,6 @@ export interface VectorMemoryConfig_ACU {
     keywordPromptGroup: VectorMemoryKeywordPromptSegment_ACU[];
     recallCandidateLimit: number;
     recentFixedExcludeCount: number;
-    summaryIndexSharedTotalLimit: number;
     summaryIndexVectorColumns: string[];
     summaryIndexPlotInjectColumns: string[];
     keywordGenerationEnabled: boolean;
@@ -228,10 +227,6 @@ export function normalizeVectorMemoryConfig_ACU(rawConfig: any): VectorMemoryCon
         recentFixedExcludeCount: normalizeNonNegativeIntegerLocal_ACU(
             (source as any).recentFixedExcludeCount,
             Number((defaults as any).recentFixedExcludeCount ?? 5),
-        ),
-        summaryIndexSharedTotalLimit: normalizeNonNegativeIntegerLocal_ACU(
-            (source as any).summaryIndexSharedTotalLimit,
-            Number((defaults as any).summaryIndexSharedTotalLimit) || 0,
         ),
         summaryIndexVectorColumns: normalizeColumnNameList_ACU((source as any).summaryIndexVectorColumns),
         summaryIndexPlotInjectColumns: normalizeColumnNameList_ACU((source as any).summaryIndexPlotInjectColumns),
@@ -414,7 +409,6 @@ export interface SummaryVectorIndexEffectiveConfig_ACU extends VectorMemoryConfi
     summaryIndexHybridRetrievalEnabled: boolean;
     summaryIndexBm25CandidateLimit: number;
     summaryIndexRrfK: number;
-    summaryIndexSharedTotalLimit: number;
     summaryIndexVectorColumns: string[];
     summaryIndexPlotInjectColumns: string[];
     keywordGenerationEnabled: boolean;
@@ -487,10 +481,6 @@ export function getEffectiveSummaryVectorIndexConfig_ACU(configInput?: any): Sum
         summaryIndexHybridRetrievalEnabled: config.hybridRetrievalEnabled !== false,
         summaryIndexBm25CandidateLimit: bm25CandidateLimit,
         summaryIndexRrfK: rrfK,
-        summaryIndexSharedTotalLimit: normalizeNonNegativeIntegerLocal_ACU(
-            (config as any).summaryIndexSharedTotalLimit,
-            Number((defaults as any).summaryIndexSharedTotalLimit) || 0,
-        ),
         summaryIndexVectorColumns: normalizeColumnNameList_ACU((config as any).summaryIndexVectorColumns),
         summaryIndexPlotInjectColumns: normalizeColumnNameList_ACU((config as any).summaryIndexPlotInjectColumns),
         keywordGenerationEnabled: (config as any).keywordGenerationEnabled !== false,

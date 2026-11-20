@@ -912,8 +912,7 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         isolationKey: normalizeSummaryVectorIsolationKey_ACU(latestLayer?.isolationKey ?? state.manifest?.isolationKey),
     };
 
-    // ── 固定排除最近 X 条（近期正文已在上下文中，不参与检索也不注入） + 召回总上限配额 ──
-    const sharedTotalLimit = Math.max(0, Math.floor(Number(config.summaryIndexSharedTotalLimit) || 0));
+    // ── 固定排除最近 X 条（近期正文已在上下文中，不参与检索也不注入） + TopK 召回上限 ──
     const rawRecentExcludeCount = Math.max(0, Math.floor(Number(config.summaryIndexRecentFixedExcludeCount) || 0));
     const recentExcludedCount = Math.min(rawRecentExcludeCount, rows.length);
     const rowsSortedByOrderDesc = [...rows].sort(
@@ -921,9 +920,7 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     );
     const recentExcludedRows = rowsSortedByOrderDesc.slice(0, recentExcludedCount);
     const recentExcludedRowKeys = new Set(recentExcludedRows.map((row) => row.rowKey));
-    const effectiveVectorTopK = sharedTotalLimit > 0
-        ? Math.min(config.topK, sharedTotalLimit)
-        : config.topK;
+    const effectiveVectorTopK = config.topK;
     // 较早的历史行（排除最近 N 条后的候选池）
     const olderRows = rows.filter((row) => !recentExcludedRowKeys.has(row.rowKey));
     if (olderRows.length === 0) {

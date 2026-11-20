@@ -706,7 +706,7 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
     expect(tail).toBe('赫敏手指抓着挎包带子，看着窗外空荡荡的草坪，从包里摸出一张便签纸递过来。');
   });
 
-  it('summaryIndexSharedTotalLimit 约束向量召回总数，且固定排除的近期行既不占位也不注入', async () => {
+  it('topK 约束向量召回总数，且固定排除的近期行既不占位也不注入', async () => {
     const r1 = row_ACU('r1', 1, 'summary 1');
     const r2 = row_ACU('r2', 2, 'summary 2');
     const r3 = row_ACU('r3', 3, 'summary 3');
@@ -724,9 +724,8 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
       keywordGenerationEnabled: false,
       summaryIndexKeywordMinRows: 1,
       summaryIndexRecentFixedExcludeCount: 2,
-      topK: 10,
+      topK: 2,
       recallCandidateLimit: 10,
-      summaryIndexSharedTotalLimit: 2,
       summaryIndexMinScore: 0,
     });
 
@@ -806,7 +805,6 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
       summaryIndexRecentFixedExcludeCount: 1,
       topK: 1,
       recallCandidateLimit: 5,
-      summaryIndexSharedTotalLimit: 2,
       summaryIndexMinScore: 0,
     });
 
@@ -842,7 +840,6 @@ describe('stripQueryTags_ACU / extractCompleteTailSentences_ACU / 直出检索�
       summaryIndexRecentFixedExcludeCount: 1,
       topK: 1,
       recallCandidateLimit: 5,
-      summaryIndexSharedTotalLimit: 2,
       summaryIndexMinScore: 0,
     });
 
