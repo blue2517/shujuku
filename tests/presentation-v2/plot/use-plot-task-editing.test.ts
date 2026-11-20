@@ -122,4 +122,22 @@ describe('usePlotTaskEditing', () => {
     expect(raw.plotTasks[1].stage).toBe(2);
     expect(raw.finalSystemDirective).toBe('我是注入指令');
   });
+
+  it('loadFromRaw 与 serializeIntoPresetRaw 正确读写 finalCodeDirective 并兼容省略参数', async () => {
+    const { usePlotTaskEditing } = await import('../../../src/presentation-v2/composables/usePlotTaskEditing');
+    const editing = usePlotTaskEditing();
+
+    editing.loadFromRaw([], '用户输入指令', '编码注入指令');
+    expect(editing.finalDirective.value).toBe('用户输入指令');
+    expect(editing.finalCodeDirective.value).toBe('编码注入指令');
+
+    const rawWithCode = editing.serializeIntoPresetRaw({});
+    expect(rawWithCode.finalSystemDirective).toBe('用户输入指令');
+    expect(rawWithCode.finalCodeInjectionDirective).toBe('编码注入指令');
+
+    editing.loadFromRaw([], '仅用户输入');
+    expect(editing.finalCodeDirective.value).toBe('');
+    const rawWithoutCode = editing.serializeIntoPresetRaw({});
+    expect(rawWithoutCode.finalCodeInjectionDirective).toBe('');
+  });
 });

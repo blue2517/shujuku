@@ -426,72 +426,111 @@ import { getTemplateVariableStores_ACU, setTemplateVariableStores_ACU, parseRand
     return buildPlotRawFallbackText_ACU(taskResults);
   }
 
-  export function buildFinalPlotInjectionMessage_ACU(finalSystemDirectiveContent: string, taskResults: any[], aggregatedTags: Map<string, any>, injectOnlyTagNames: Set<string> = new Set()) {
+  function collectDirectivePlaceholderNames_ACU(directive: string): string[] {
+    const placeholderPattern = /\{\{(\w+)\}\}/g;
+    const names: string[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = placeholderPattern.exec(directive)) !== null) {
+      if (!isReservedPlotPassthroughPlaceholder_ACU(match[1])) {
+        names.push(match[1]);
+      }
+    }
+    return names;
+  }
+
+  function replaceDirectivePlaceholders_ACU(
+    directive: string,
+    aggregatedTags: Map<string, any>,
+    matchedTags: Set<string>,
+  ): { rendered: string; hasInjectedTag: boolean } {
+    let hasInjectedTag = false;
+    const placeholderPattern = /\{\{(\w+)\}\}/g;
+    const rendered = directive.replace(placeholderPattern, (placeholder, tagName) => {
+      if (isReservedPlotPassthroughPlaceholder_ACU(tagName)) return placeholder;
+      if (!(aggregatedTags instanceof Map) || aggregatedTags.size === 0) return '';
+      const resolvedValue = getPlotTagMapValue_ACU(aggregatedTags, tagName);
+      matchedTags.add(String(tagName || '').toLowerCase());
+      if (resolvedValue.found) {
+        matchedTags.add(String(resolvedValue.actualTagName || '').toLowerCase());
+      }
+      const contents = resolvedValue.value;
+      if (hasMeaningfulTagContents_ACU(contents)) {
+        hasInjectedTag = true;
+        return buildPlotTagBlock_ACU(tagName, contents);
+      }
+      return '';
+    });
+    return { rendered, hasInjectedTag };
+  }
+
+  function collectUnusedTagBlocks_ACU(
+    aggregatedTags: Map<string, any>,
+    matchedTags: Set<string>,
+    injectOnlyTagNamesLower: Set<string>,
+  ): string {
+    if (!(aggregatedTags instanceof Map) || aggregatedTags.size === 0) return '';
+    const unusedTagBlocks: string[] = [];
+    aggregatedTags.forEach((contents, tagName) => {
+      const loweredTagName = String(tagName || '').toLowerCase();
+      if (matchedTags.has(loweredTagName)) return;
+      // injectOnly 标签（extractInjectTags 提取的）即使未使用也不追加到末尾
+      if (injectOnlyTagNamesLower.has(loweredTagName)) return;
+      if (!hasMeaningfulTagContents_ACU(contents)) return;
+      const block = buildPlotTagBlock_ACU(tagName, contents);
+      if (block) unusedTagBlocks.push(block);
+    });
+    return unusedTagBlocks.join('\n\n').trim();
+  }
+
+  export function buildFinalPlotInjectionMessage_ACU(
+    finalSystemDirectiveContent: string,
+    taskResults: any[],
+    aggregatedTags: Map<string, any>,
+    injectOnlyTagNames: Set<string> = new Set(),
+    finalCodeInjectionDirectiveContent: string = '',
+  ) {
     const defaultDirective = '[SYSTEM_DIRECTIVE: You are a storyteller. The following <plot> block is your absolute script for this turn. You MUST follow the <directive> within it to generate the story.]';
     const baseDirective = String(finalSystemDirectiveContent || '').trim() || defaultDirective;
+    const codeDirective = String(finalCodeInjectionDirectiveContent || '').trim();
     const rawFallbackText = buildPlotRawFallbackText_ACU(taskResults);
-    const placeholderPattern = /\{\{(\w+)\}\}/g;
-    const placeholderNames = [];
-    let match;
+    const hasAggregatedTags = aggregatedTags instanceof Map && aggregatedTags.size > 0;
+    const matchedTags = new Set<string>();
+    const injectOnlyTagNamesLower = new Set(Array.from(injectOnlyTagNames).map((name: string) => String(name || '').toLowerCase()));
 
-    while ((match = placeholderPattern.exec(baseDirective)) !== null) {
-      if (!isReservedPlotPassthroughPlaceholder_ACU(match[1])) {
-        placeholderNames.push(match[1]);
-      }
+    const basePlaceholders = collectDirectivePlaceholderNames_ACU(baseDirective);
+    const userSection = basePlaceholders.length > 0
+      ? replaceDirectivePlaceholders_ACU(baseDirective, aggregatedTags, matchedTags).rendered.trim()
+      : baseDirective;
+
+    if (!codeDirective) {
+      const trailingContent = hasAggregatedTags
+        ? collectUnusedTagBlocks_ACU(aggregatedTags, matchedTags, injectOnlyTagNamesLower)
+        : rawFallbackText;
+      return [userSection, trailingContent].filter(Boolean).join('\n');
     }
 
-    if (aggregatedTags instanceof Map && aggregatedTags.size > 0) {
-      if (placeholderNames.length > 0) {
-        const matchedTags = new Set();
-        const injectOnlyTagNamesLower = new Set(Array.from(injectOnlyTagNames).map((name: string) => String(name || '').toLowerCase()));
-        const finalDirectiveWithTags = baseDirective.replace(placeholderPattern, (placeholder, tagName) => {
-          if (isReservedPlotPassthroughPlaceholder_ACU(tagName)) return placeholder;
-          const resolvedValue = getPlotTagMapValue_ACU(aggregatedTags, tagName);
-          matchedTags.add(String(tagName || '').toLowerCase());
-          if (resolvedValue.found) {
-            matchedTags.add(String(resolvedValue.actualTagName || '').toLowerCase());
-          }
-          const contents = resolvedValue.value;
-          if (hasMeaningfulTagContents_ACU(contents)) {
-            return `<${tagName}>${(Array.isArray(contents) ? contents : [contents]).map(content => content ?? '').join('\n\n')}</${tagName}>`;
-          }
-          return '';
-        });
+    const codePlaceholders = collectDirectivePlaceholderNames_ACU(codeDirective);
+    let codeSection = '';
+    let trailingContent = '';
 
-        const unusedTagBlocks: string[] = [];
-        aggregatedTags.forEach((contents, tagName) => {
-          const loweredTagName = String(tagName || '').toLowerCase();
-          if (matchedTags.has(loweredTagName)) return;
-          // injectOnly 标签（extractInjectTags 提取的）即使未使用也不追加到末尾
-          if (injectOnlyTagNamesLower.has(loweredTagName)) return;
-          if (!hasMeaningfulTagContents_ACU(contents)) return;
-          unusedTagBlocks.push(`<${tagName}>${(Array.isArray(contents) ? contents : [contents]).map(content => content ?? '').join('\n\n')}</${tagName}>`);
-        });
-
-        return [finalDirectiveWithTags.trim(), unusedTagBlocks.join('\n\n').trim()]
-          .filter(Boolean)
-          .join('\n');
-      }
-
-      // 没有占位符时：只追加非 injectOnly 的标签块
-      const filteredTags = new Map();
-      const injectOnlyTagNamesLower = new Set(Array.from(injectOnlyTagNames).map((name: string) => String(name || '').toLowerCase()));
-      aggregatedTags.forEach((contents, tagName) => {
-        if (!injectOnlyTagNamesLower.has(String(tagName || '').toLowerCase()) && hasMeaningfulTagContents_ACU(contents)) {
-          filteredTags.set(tagName, contents);
+    if (hasAggregatedTags) {
+      if (codePlaceholders.length > 0) {
+        const codeResult = replaceDirectivePlaceholders_ACU(codeDirective, aggregatedTags, matchedTags);
+        if (codeResult.hasInjectedTag) {
+          codeSection = codeResult.rendered.trim();
         }
-      });
-      const aggregatedTagBlocks = buildAggregatedPlotTagBlocks_ACU(filteredTags);
-      return [baseDirective, aggregatedTagBlocks].filter(Boolean).join('\n');
+      }
+      trailingContent = collectUnusedTagBlocks_ACU(aggregatedTags, matchedTags, injectOnlyTagNamesLower);
+      if (codePlaceholders.length === 0 && trailingContent) {
+        codeSection = codeDirective;
+      }
+    } else if (rawFallbackText) {
+      if (codePlaceholders.length === 0) {
+        codeSection = codeDirective;
+      }
+      trailingContent = rawFallbackText;
     }
 
-    if (placeholderNames.length > 0) {
-      const finalDirectiveWithoutTags = baseDirective.replace(
-        placeholderPattern,
-        (placeholder, tagName) => (isReservedPlotPassthroughPlaceholder_ACU(tagName) ? placeholder : ''),
-      );
-      return [finalDirectiveWithoutTags.trim(), rawFallbackText].filter(Boolean).join('\n');
-    }
-
-    return [baseDirective, rawFallbackText].filter(Boolean).join('\n');
+    const codeBlock = [codeSection, trailingContent].filter(Boolean).join('\n');
+    return [userSection, codeBlock].filter(Boolean).join('\n\n');
   }

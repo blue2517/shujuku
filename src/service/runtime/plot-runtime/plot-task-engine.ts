@@ -467,21 +467,30 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
 
     // 世界书后处理已在任务级逻辑中完成；共享阶段不再做后处理
 
+    const renderPlotDirectiveTemplate = async (template: string) => {
+      let rendered = String(template || '');
+      if (!rendered.trim()) return '';
+      rendered = await resolveTableWorldbookTokens(rendered);
+      rendered = await tryRenderPlotTemplateWithEjs_ACU(rendered);
+      rendered = performReplacements(rendered);
+      rendered = parseRandomTags_ACU(rendered);
+      rendered = replaceRandomVariables_ACU(rendered);
+      // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下）
+      rendered = replaceDbSqlVariables(rendered);
+      return rendered ? rendered.trim() : '';
+    };
+
     const defaultDirective = '[SYSTEM_DIRECTIVE: You are a storyteller. The following <plot> block is your absolute script for this turn. You MUST follow the <directive> within it to generate the story.]';
-    let finalSystemDirectiveContent = defaultDirective;
-    let rawFinal = getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective')
+    const rawFinal = getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective')
       || plotSettings.finalSystemDirective
       || '';
-    rawFinal = await resolveTableWorldbookTokens(rawFinal);
-    rawFinal = await tryRenderPlotTemplateWithEjs_ACU(rawFinal);
-    const plotFinalDirective = performReplacements(rawFinal);
-    let finalWithRandom = parseRandomTags_ACU(plotFinalDirective);
-    finalWithRandom = replaceRandomVariables_ACU(finalWithRandom);
-    // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下）
-    finalWithRandom = replaceDbSqlVariables(finalWithRandom);
-    if (finalWithRandom && finalWithRandom.trim()) {
-      finalSystemDirectiveContent = finalWithRandom.trim();
-    }
+    const renderedFinal = await renderPlotDirectiveTemplate(rawFinal);
+    const finalSystemDirectiveContent = renderedFinal || defaultDirective;
+
+    const rawCodeInjectionDirective = typeof plotSettings.finalCodeInjectionDirective === 'string'
+      ? plotSettings.finalCodeInjectionDirective
+      : '';
+    const finalCodeInjectionDirectiveContent = await renderPlotDirectiveTemplate(rawCodeInjectionDirective);
 
     let seedContentForConditional = '';
     try {
@@ -498,6 +507,7 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
       performReplacements,
       resolveTableWorldbookTokens,
       finalSystemDirectiveContent,
+      finalCodeInjectionDirectiveContent,
       seedContentForConditional,
       recentContextMessages: Array.isArray(agentContextMessages) ? agentContextMessages : [],
       allTablesJson: currentJsonTableData_ACU,
@@ -1075,12 +1085,20 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
       await applyAgentFinalGreenlights_ACU(agentDecision);
     }
 
-    const finalMessage = buildFinalPlotInjectionMessage_ACU(
-      sharedContext.finalSystemDirectiveContent,
-      successfulResults,
-      aggregatedTags,
-      aggregatedInjectOnlyTagNames,
-    );
+    const finalMessage = sharedContext.finalCodeInjectionDirectiveContent
+      ? buildFinalPlotInjectionMessage_ACU(
+          sharedContext.finalSystemDirectiveContent,
+          successfulResults,
+          aggregatedTags,
+          aggregatedInjectOnlyTagNames,
+          sharedContext.finalCodeInjectionDirectiveContent,
+        )
+      : buildFinalPlotInjectionMessage_ACU(
+          sharedContext.finalSystemDirectiveContent,
+          successfulResults,
+          aggregatedTags,
+          aggregatedInjectOnlyTagNames,
+        );
     const saveContent = buildPlotSaveContentFromTaskResults_ACU(successfulResults);
     const userInputHash = hashUserInput_ACU(inputForHash);
     const finalMessageHash = hashUserInput_ACU(finalMessage);

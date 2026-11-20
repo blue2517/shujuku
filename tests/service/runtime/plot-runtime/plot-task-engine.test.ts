@@ -2908,4 +2908,65 @@ describe('runPlotTasksRuntime_ACU', () => {
       { excludeRecentCount: 4 },
     );
   });
+
+  it('配置 finalCodeInjectionDirective 时在共享上下文中渲染变量并作为第 5 参数传给 buildFinalPlotInjectionMessage_ACU', async () => {
+    const plotSettings = {
+      directRecallWhenBelowThreshold: false,
+      recallCount: 20,
+      finalSystemDirective: '用户输入=$8',
+      finalCodeInjectionDirective: '编码说明($8):\n{{recall}}',
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '$5' }],
+        },
+      ],
+    };
+
+    await runPlotTasksRuntime_ACU(plotSettings, '你好世界');
+
+    expect(mockBuildFinalPlotInjectionMessage).toHaveBeenCalledWith(
+      '用户输入=你好世界',
+      expect.any(Array),
+      expect.anything(),
+      expect.anything(),
+      '编码说明(你好世界):\n{{recall}}',
+    );
+  });
+
+  it('finalCodeInjectionDirective 仅空白时保持 4 参数调用 buildFinalPlotInjectionMessage_ACU', async () => {
+    const plotSettings = {
+      directRecallWhenBelowThreshold: false,
+      recallCount: 20,
+      finalSystemDirective: '用户输入=$8',
+      finalCodeInjectionDirective: '   ',
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '$5' }],
+        },
+      ],
+    };
+
+    await runPlotTasksRuntime_ACU(plotSettings, '你好世界');
+
+    expect(mockBuildFinalPlotInjectionMessage).toHaveBeenCalledWith(
+      '用户输入=你好世界',
+      expect.any(Array),
+      expect.anything(),
+      expect.anything(),
+    );
+    const lastCall = mockBuildFinalPlotInjectionMessage.mock.calls.at(-1);
+    expect(lastCall).toHaveLength(4);
+  });
 });

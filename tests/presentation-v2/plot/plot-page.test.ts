@@ -695,4 +695,75 @@ describe('PlotPage', () => {
 
     mount.__resetAcuV2MountForTests();
   });
+
+  it('编辑预设抽屉将最终注入指令拆分为"用户输入注入指令"与"编码注入指令"并分别保存', async () => {
+    const preset = {
+      name: '分离注入测试预设',
+      rateMain: 1,
+      ratePersonal: 1,
+      rateErotic: 0,
+      rateCuckold: 1,
+      recallCount: 20,
+      extractTags: 'recall',
+      minLength: 0,
+      contextTurnCount: 3,
+      finalSystemDirective: '初始用户输入=$8',
+      finalCodeInjectionDirective: '初始编码说明:\n{{recall}}',
+      plotTasks: [{ id: 'task-1', name: '任务1', stage: 1, order: 1, promptGroup: [] }],
+      prompts: [
+        { id: 'finalSystemDirective', role: 'system', name: '最终注入指令', content: '初始用户输入=$8', deletable: false },
+      ],
+    };
+    const settings = createSettings();
+    settings.plotSettings.promptPresets = [preset];
+    settings.plotSettings.lastUsedPresetName = '分离注入测试预设';
+    settings.plotSettings.finalSystemDirective = '初始用户输入=$8';
+    settings.plotSettings.finalCodeInjectionDirective = '初始编码说明:\n{{recall}}';
+
+    const { mount } = await mountPlotPage({ settings });
+    await nextTick();
+
+    const editButton = Array.from(document.querySelectorAll('button'))
+      .find(b => b.getAttribute('title') === '编辑当前预设') as HTMLButtonElement | undefined;
+    expect(editButton).toBeDefined();
+    editButton!.click();
+    await nextTick();
+
+    const drawer = document.querySelector('.acu-v2-drawer') as HTMLElement | null;
+    expect(drawer).not.toBeNull();
+    const drawerText = drawer!.textContent || '';
+    expect(drawerText).toContain('用户输入注入指令');
+    expect(drawerText).toContain('编码注入指令');
+
+    const userField = drawer!.querySelector('[data-acu-plot-directive="user"]') as HTMLElement | null;
+    const codeField = drawer!.querySelector('[data-acu-plot-directive="code"]') as HTMLElement | null;
+    const userTextarea = (userField?.tagName === 'TEXTAREA'
+      ? userField
+      : userField?.querySelector('textarea')) as HTMLTextAreaElement | null;
+    const codeTextarea = (codeField?.tagName === 'TEXTAREA'
+      ? codeField
+      : codeField?.querySelector('textarea')) as HTMLTextAreaElement | null;
+
+    expect(userTextarea).not.toBeNull();
+    expect(codeTextarea).not.toBeNull();
+    expect(userTextarea!.value).toBe('初始用户输入=$8');
+    expect(codeTextarea!.value).toBe('初始编码说明:\n{{recall}}');
+
+    userTextarea!.value = '修改后用户输入=$8';
+    userTextarea!.dispatchEvent(new Event('input', { bubbles: true }));
+    codeTextarea!.value = '修改后编码说明:\n{{recall}}';
+    codeTextarea!.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+
+    const saveButton = Array.from(drawer!.querySelectorAll('button'))
+      .find(button => (button.textContent || '').includes('保存预设')) as HTMLButtonElement | undefined;
+    expect(saveButton).toBeDefined();
+    saveButton!.click();
+    await nextTick();
+
+    expect(settings.plotSettings.promptPresets[0].finalSystemDirective).toBe('修改后用户输入=$8');
+    expect(settings.plotSettings.promptPresets[0].finalCodeInjectionDirective).toBe('修改后编码说明:\n{{recall}}');
+
+    mount.__resetAcuV2MountForTests();
+  });
 });

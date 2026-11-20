@@ -164,6 +164,7 @@ export function usePlotPresetManagement() {
       directRecall: directRecallWhenBelowThreshold.value,
       tasks: taskEditing.tasks.value,
       directive: taskEditing.finalDirective.value,
+      codeDirective: taskEditing.finalCodeDirective.value,
     });
   }
 
@@ -192,6 +193,7 @@ export function usePlotPresetManagement() {
     taskEditing.tasks.value = [];
     taskEditing.currentTaskId.value = '';
     taskEditing.finalDirective.value = '';
+    taskEditing.finalCodeDirective.value = '';
     initialSnapshot.value = '';
   }
 
@@ -209,7 +211,7 @@ export function usePlotPresetManagement() {
     contextRules.excludeRules = normalizeRulePairs(raw.contextExcludeRules, raw.contextExcludeTags || '', 'exclude');
     Object.assign(draftRates, readDraftRates(raw));
     directRecallWhenBelowThreshold.value = raw.directRecallWhenBelowThreshold === true;
-    taskEditing.loadFromRaw(raw.plotTasks || [], raw.finalSystemDirective || '');
+    taskEditing.loadFromRaw(raw.plotTasks || [], raw.finalSystemDirective || '', raw.finalCodeInjectionDirective || '');
     error.value = '';
     drawerView.value = 'create';
     saveSnapshot();
@@ -227,7 +229,11 @@ export function usePlotPresetManagement() {
     contextRules.excludeRules = normalizeRulePairs(target.raw?.contextExcludeRules, target.raw?.contextExcludeTags || '', 'exclude');
     Object.assign(draftRates, readDraftRates(target.raw || null));
     directRecallWhenBelowThreshold.value = target.raw?.directRecallWhenBelowThreshold === true;
-    taskEditing.loadFromRaw(target.raw?.plotTasks || [], target.raw?.finalSystemDirective || '');
+    taskEditing.loadFromRaw(
+      target.raw?.plotTasks || [],
+      target.raw?.finalSystemDirective || '',
+      target.raw?.finalCodeInjectionDirective || '',
+    );
     error.value = '';
     drawerView.value = 'edit';
     saveSnapshot();

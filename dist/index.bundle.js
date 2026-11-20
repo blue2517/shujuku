@@ -1525,10 +1525,11 @@ sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生�
                 "id": "finalSystemDirective",
                 "name": "最终注入指令",
                 "role": "system",
-                "content": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>\n\n以下输入的代码为既定事实记忆的对应索引编码，并已按时间距离分组。注意，请参考这些过去记忆保持剧情连续性，不在正文里直接引用编码，并自然融入对应的时间约束词：\n\n[时间约束词]\nnow=刚刚|刚才|眼下|此刻|这会儿\ntoday=今天早些时候|今天稍早|白天的时候|今天\ndays=这两天|这几天|近几天|前些天\nweeks=前阵子|这阵子|早些时候\nmonths=半个月前|上个月|之前|不久前|前些日子\nseasons=几个月前|小半年前|当时|那阵子|上次\nyears=一年前|去年|前几年|这几年|几年前|那几年|好多个月前\nold=很久以前|过去|那阵子|早些时候|当时|上次\nunknown=有一次|曾经|某次|上次\n\n",
+                "content": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>",
                 "deletable": false
             }
         ],
+        "finalCodeInjectionDirective": "以下输入的代码为既定事实记忆的对应索引编码，并已按时间距离分组。注意，请参考这些过去记忆保持剧情连续性，不在正文里直接引用编码，并自然融入对应的时间约束词：\n\n[时间约束词]\nnow=刚刚|刚才|眼下|此刻|这会儿\ntoday=今天早些时候|今天稍早|白天的时候|今天\ndays=这两天|这几天|近几天|前些天\nweeks=前阵子|这阵子|早些时候\nmonths=半个月前|上个月|之前|不久前|前些日子\nseasons=几个月前|小半年前|当时|那阵子|上次\nyears=一年前|去年|前几年|这几年|几年前|那几年|好多个月前\nold=很久以前|过去|那阵子|早些时候|当时|上次\nunknown=有一次|曾经|某次|上次",
         "recallCount": 25,
         "directRecallWhenBelowThreshold": false,
         "extractTags": "recall",
@@ -1700,11 +1701,12 @@ sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生�
                 "deletable": true
             }
         ],
-        "finalSystemDirective": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>\n\n以下输入的代码为既定事实记忆的对应索引编码，并已按时间距离分组。注意，请参考这些过去记忆保持剧情连续性，不在正文里直接引用编码，并自然融入对应的时间约束词：\n\n[时间约束词]\nnow=刚刚|刚才|眼下|此刻|这会儿\ntoday=今天早些时候|今天稍早|白天的时候|今天\ndays=这两天|这几天|近几天|前些天\nweeks=前阵子|这阵子|早些时候\nmonths=半个月前|上个月|之前|不久前|前些日子\nseasons=几个月前|小半年前|当时|那阵子|上次\nyears=一年前|去年|前几年|这几年|几年前|那几年|好多个月前\nold=很久以前|过去|那阵子|早些时候|当时|上次\nunknown=有一次|曾经|某次|上次\n\n",
+        "finalSystemDirective": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>",
+        "finalCodeInjectionDirective": "以下输入的代码为既定事实记忆的对应索引编码，并已按时间距离分组。注意，请参考这些过去记忆保持剧情连续性，不在正文里直接引用编码，并自然融入对应的时间约束词：\n\n[时间约束词]\nnow=刚刚|刚才|眼下|此刻|这会儿\ntoday=今天早些时候|今天稍早|白天的时候|今天\ndays=这两天|这几天|近几天|前些天\nweeks=前阵子|这阵子|早些时候\nmonths=半个月前|上个月|之前|不久前|前些日子\nseasons=几个月前|小半年前|当时|那阵子|上次\nyears=一年前|去年|前几年|这几年|几年前|那几年|好多个月前\nold=很久以前|过去|那阵子|早些时候|当时|上次\nunknown=有一次|曾经|某次|上次",
         "mainPrompt": "",
         "systemPrompt": "<task_rules>\nYou select AM from「已发生的事件概览」, group by time, output <match> then <recall>.\n\n==========================================\nHARD CONSTRAINTS\n==========================================\n- AM source: ONLY「已发生的事件概览」. Never invent. Never use AM from USER_INPUT/PREVIOUS_PLOT/背景设定.\n- required_count = min({zhaohui}, total_AM_in_概览). If 概览 empty, required_count=0.\n- <match> count = <recall> count = required_count. Same AM set.\n- Selection by content only. NEVER by time distance, NEVER by AM code order.\n- Time is computed AFTER selection is finalized.\n\n==========================================\nSTEP 1: LIST ALL AM (mandatory output)\n==========================================\nFirst output ALL AM codes from 概览, comma separated:\n\n<all_am>\nAM0001, AM0002, AM0003, ...\n</all_am>\n\nThis forces you to see the full set before picking.\n\n==========================================\nSTEP 2: SELF CHECK (mandatory output)\n==========================================\nThen output:\n\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\n\n==========================================\nSTEP 3: SELECT (priority order)\n==========================================\n\nFor each AM, judge link type by CONTENT, not by time:\n\n[REAL LINK] — AM concretely affects current plot:\n- 因果链: cause/result/risk/obstacle/next action\n- 人物关系: trust/betrayal/promise/grudge/tension\n- 共同经历: shared past changes current interaction\n- 物品线索: evidence/clue/identity/anomaly\n- 矛盾挑战: challenges current claim/stance\n- 情感主题: trauma/fear/desire/value conflict\n- 地点延续: same place AND place still affects action\n\n[WEAK LINK] — indirect but concrete:\n- same character with known attitude/conflict\n- same relationship pair with prior tension/debt\n- same object/clue/location/organization thread\n- same unresolved plot thread\n\n[FALLBACK] — only to fill required_count:\n- same character / same pair / same object / same thread / same area\n- 类型 must be 补位召回\n\nPick order: REAL LINK > WEAK LINK > FALLBACK, until count = required_count.\n\nSame keyword/name/place ALONE is NOT REAL LINK. It is WEAK LINK at best.\n\n==========================================\nSTEP 4: TIME (only for selected AM)\n==========================================\n\ncurrent_time = USER_INPUT time | PREVIOUS_PLOT last time | max end_time in 概览.\n\nFor each selected AM:\n  end_time = time after \"~\" in 时间跨度\n  diff_min = minutes(current_time - end_time)\n\nIf current_time/end_time missing OR diff_min<0:\n  diff_min=NA, group=unknown, display=记不清时间.\n\nElse pick group by diff_min (USE MINUTES DIRECTLY):\n\n  diff_min          | group     | display\n  ------------------+-----------+----------\n  0-120             | now       | Xm\n  121-1440          | today     | XhYm\n  1441-7200         | days      | XdXhYm\n  7201-30240        | weeks     | XdXhYm\n  30241-86400       | months    | XdXhYm\n  86401-259200      | seasons   | XdXhYm\n  259201-2628000     | years     | XdXhYm\n  2628001+           | old       | XdXhYm\n\nCritical boundaries: 1440=today, 1441=days | 7200=days, 7201=weeks | 30240=weeks, 30241=months | 86400=months, 86401=seasons | 259200=seasons, 259201=years | 2628000=years, 2628001=old.\n\n==========================================\nSTEP 5: OUTPUT <match>\n==========================================\n\nFormat (one line per AM):\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n类型 must be one of: 因果链 / 人物关系 / 共同经历 / 物品线索 / 矛盾挑战 / 情感主题 / 地点延续 / 补位召回\n\n理由 must state: 当前剧情具体问题 + this AM's concrete effect (or weak basis, or fallback basis).\nBad 理由: only says \"相关/有关/呼应剧情\", only repeats 概览, uses time distance, invents facts.\n\nConsistency: diff_min MUST fit group by the table above. If mismatch, fix group.\n\n==========================================\nSTEP 6: OUTPUT <recall>\n==========================================\n\nCopy from <match>. For each AM line, put \"AMxxxx | display\" under its group.\nDo NOT copy 类型, diff_min, 理由. Keep all group names even if empty.\n\n<recall>\nnow =\ntoday =\ndays =\nweeks =\nmonths =\nseasons =\nyears =\nold =\nunknown =\n</recall>\n\n==========================================\nFULL OUTPUT TEMPLATE\n==========================================\n\n<all_am>\nAM0001, AM0002, ...\n</all_am>\n\n<self_check>\ntotal_am=N\nrequired_count=N\nselection_basis=content_only\ntime_computed=after_selection\n</self_check>\n\n<match>\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\nAMxxxx | 类型 | diff_min=XXXX | group | display | 理由\n</match>\n\n<recall>\nnow =\nAMxxxx | Xm\ntoday =\nAMxxxx | XhYm\ndays =\nAMxxxx | XdXhYm\nweeks =\nAMxxxx | XdXhYm\nmonths =\nAMxxxx | XdXhYm\nseasons =\nAMxxxx | XdXhYm\nyears =\nAMxxxx | XdXhYm\nold =\nAMxxxx | XdXhYm\nunknown =\nAMxxxx | 记不清时间\n</recall>\n</task_rules>",
         "_acuBuiltinPresetId": "time-recall",
-        "_acuBuiltinPresetVersion": "v4.9"
+        "_acuBuiltinPresetVersion": "v4.10"
     };
     const DEFAULT_BUILTIN_PLOT_PRESETS_ACU = [DEFAULT_TIME_RECALL_PLOT_PRESET_ACU];
     // --- [剧情推进] 默认设置 ---
@@ -1729,10 +1731,11 @@ sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生�
                 "id": "finalSystemDirective",
                 "name": "最终注入指令",
                 "role": "system",
-                "content": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>\n\n以下输入的代码为接下来剧情相关记忆条目的对应的索引编码。注意它们仅为相关的过去记忆，你要结合它们里边的信息合理生成接下来的剧情：",
+                "content": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>",
                 "deletable": false
             }
         ],
+        "finalCodeInjectionDirective": "以下输入的代码为接下来剧情相关记忆条目的对应的索引编码。注意它们仅为相关的过去记忆，你要结合它们里边的信息合理生成接下来的剧情：\n{{recall}}",
         "rateMain": 1,
         "ratePersonal": 1,
         "rateErotic": 0,
@@ -66554,6 +66557,13 @@ $CONTENT
             || getLegacyPromptFromThree_ACU(source.prompts, 'finalSystemDirective')
             || '';
     }
+    function getPlotCodeInjectionDirectiveFromSource_ACU(source) {
+        if (!source || typeof source !== 'object')
+            return '';
+        return typeof source.finalCodeInjectionDirective === 'string'
+            ? source.finalCodeInjectionDirective
+            : '';
+    }
     // ═══ 任务规范化 ═══
     function hasOwnField_ACU(source, key) {
         return !!source && Object.prototype.hasOwnProperty.call(source, key);
@@ -66870,6 +66880,7 @@ $CONTENT
         ensureLoopPromptsArray_ACU(activePlotEditorSettings_ACU);
         ensurePlotTasksCompat_ACU(activePlotEditorSettings_ACU, { syncLegacy: true });
         activePlotEditorSettings_ACU.finalSystemDirective = getPlotFinalDirectiveFromSource_ACU(activePlotEditorSettings_ACU);
+        activePlotEditorSettings_ACU.finalCodeInjectionDirective = getPlotCodeInjectionDirectiveFromSource_ACU(activePlotEditorSettings_ACU);
         setPlotPromptContentByIdForSettings_ACU(activePlotEditorSettings_ACU, 'finalSystemDirective', activePlotEditorSettings_ACU.finalSystemDirective || '');
         return activePlotEditorSettings_ACU;
     }
@@ -66887,17 +66898,19 @@ $CONTENT
     }
     function applyPlotPresetToSettings_ACU(plotSettings, preset) {
         if (!plotSettings || !preset) {
-            return { normalizedPreset: null, promptGroup: [], finalDirective: '' };
+            return { normalizedPreset: null, promptGroup: [], finalDirective: '', finalCodeDirective: '' };
         }
         const preservedEnabled = plotSettings.enabled === true;
         const normalizedPreset = normalizePlotPresetExcludeRules_ACU(preset);
         const finalDirective = getPlotFinalDirectiveFromSource_ACU(normalizedPreset);
+        const finalCodeDirective = getPlotCodeInjectionDirectiveFromSource_ACU(normalizedPreset);
         ensurePlotPromptsArray_ACU(plotSettings);
         ensureLoopPromptsArray_ACU(plotSettings);
         plotSettings.enabled = preservedEnabled;
         plotSettings.plotTasks = normalizePlotTasks_ACU(normalizedPreset);
         plotSettings.promptGroup = JSON.parse(JSON.stringify(getPlotPromptGroupFromSource_ACU(normalizedPreset)));
         plotSettings.finalSystemDirective = finalDirective || '';
+        plotSettings.finalCodeInjectionDirective = finalCodeDirective || '';
         setPlotPromptContentByIdForSettings_ACU(plotSettings, 'finalSystemDirective', finalDirective || '');
         plotSettings.rateMain = normalizedPreset.rateMain ?? 1.0;
         plotSettings.ratePersonal = normalizedPreset.ratePersonal ?? 1.0;
@@ -66921,10 +66934,12 @@ $CONTENT
         ensureLoopPromptsArray_ACU(plotSettings);
         ensurePlotTasksCompat_ACU(plotSettings, { syncLegacy: true });
         plotSettings.finalSystemDirective = getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective') || plotSettings.finalSystemDirective || '';
+        plotSettings.finalCodeInjectionDirective = finalCodeDirective || '';
         return {
             normalizedPreset,
             promptGroup: JSON.parse(JSON.stringify(plotSettings.promptGroup || [])),
             finalDirective: getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective') || '',
+            finalCodeDirective: plotSettings.finalCodeInjectionDirective || '',
         };
     }
     function resetPlotSettingsToDefault_ACU(plotSettings) {
@@ -66975,6 +66990,7 @@ $CONTENT
         ensureLoopPromptsArray_ACU(plotSettings);
         ensurePlotTasksCompat_ACU(plotSettings, { syncLegacy: true });
         plotSettings.finalSystemDirective = getPlotFinalDirectiveFromSource_ACU(plotSettings);
+        plotSettings.finalCodeInjectionDirective = getPlotCodeInjectionDirectiveFromSource_ACU(plotSettings);
         setPlotPromptContentByIdForSettings_ACU(plotSettings, 'finalSystemDirective', plotSettings.finalSystemDirective || '');
         return plotSettings;
     }
@@ -66998,6 +67014,7 @@ $CONTENT
         cloned.contextExcludeRules = normalizeExcludeRules_ACU(cloned.contextExcludeRules, cloned.contextExcludeTags || '');
         cloned.plotTasks = stripPlotTaskRuntimeApiPresetFields_ACU(normalizePlotTasks_ACU(cloned));
         cloned.finalSystemDirective = getPlotFinalDirectiveFromSource_ACU(cloned);
+        cloned.finalCodeInjectionDirective = getPlotCodeInjectionDirectiveFromSource_ACU(cloned);
         ensurePlotTasksCompat_ACU(cloned, { syncLegacy: true });
         cloned.plotTasks = stripPlotTaskRuntimeApiPresetFields_ACU(normalizePlotTasks_ACU(cloned));
         setPlotPromptContentByIdForSettings_ACU(cloned, 'finalSystemDirective', cloned.finalSystemDirective || '');
@@ -67238,6 +67255,7 @@ $CONTENT
         ensureLoopPromptsArray_ACU(previewSettings);
         ensurePlotTasksCompat_ACU(previewSettings, { syncLegacy: true });
         previewSettings.finalSystemDirective = getPlotFinalDirectiveFromSource_ACU(previewSettings);
+        previewSettings.finalCodeInjectionDirective = getPlotCodeInjectionDirectiveFromSource_ACU(previewSettings);
         setPlotPromptContentByIdForSettings_ACU(previewSettings, 'finalSystemDirective', previewSettings.finalSystemDirective || '');
         return previewSettings;
     }
@@ -68669,68 +68687,99 @@ $CONTENT
     function buildPlotSaveContentFromTaskResults_ACU(taskResults) {
         return buildPlotRawFallbackText_ACU(taskResults);
     }
-    function buildFinalPlotInjectionMessage_ACU(finalSystemDirectiveContent, taskResults, aggregatedTags, injectOnlyTagNames = new Set()) {
+    function collectDirectivePlaceholderNames_ACU(directive) {
+        const placeholderPattern = /\{\{(\w+)\}\}/g;
+        const names = [];
+        let match;
+        while ((match = placeholderPattern.exec(directive)) !== null) {
+            if (!isReservedPlotPassthroughPlaceholder_ACU(match[1])) {
+                names.push(match[1]);
+            }
+        }
+        return names;
+    }
+    function replaceDirectivePlaceholders_ACU(directive, aggregatedTags, matchedTags) {
+        let hasInjectedTag = false;
+        const placeholderPattern = /\{\{(\w+)\}\}/g;
+        const rendered = directive.replace(placeholderPattern, (placeholder, tagName) => {
+            if (isReservedPlotPassthroughPlaceholder_ACU(tagName))
+                return placeholder;
+            if (!(aggregatedTags instanceof Map) || aggregatedTags.size === 0)
+                return '';
+            const resolvedValue = getPlotTagMapValue_ACU(aggregatedTags, tagName);
+            matchedTags.add(String(tagName || '').toLowerCase());
+            if (resolvedValue.found) {
+                matchedTags.add(String(resolvedValue.actualTagName || '').toLowerCase());
+            }
+            const contents = resolvedValue.value;
+            if (hasMeaningfulTagContents_ACU(contents)) {
+                hasInjectedTag = true;
+                return buildPlotTagBlock_ACU(tagName, contents);
+            }
+            return '';
+        });
+        return { rendered, hasInjectedTag };
+    }
+    function collectUnusedTagBlocks_ACU(aggregatedTags, matchedTags, injectOnlyTagNamesLower) {
+        if (!(aggregatedTags instanceof Map) || aggregatedTags.size === 0)
+            return '';
+        const unusedTagBlocks = [];
+        aggregatedTags.forEach((contents, tagName) => {
+            const loweredTagName = String(tagName || '').toLowerCase();
+            if (matchedTags.has(loweredTagName))
+                return;
+            // injectOnly 标签（extractInjectTags 提取的）即使未使用也不追加到末尾
+            if (injectOnlyTagNamesLower.has(loweredTagName))
+                return;
+            if (!hasMeaningfulTagContents_ACU(contents))
+                return;
+            const block = buildPlotTagBlock_ACU(tagName, contents);
+            if (block)
+                unusedTagBlocks.push(block);
+        });
+        return unusedTagBlocks.join('\n\n').trim();
+    }
+    function buildFinalPlotInjectionMessage_ACU(finalSystemDirectiveContent, taskResults, aggregatedTags, injectOnlyTagNames = new Set(), finalCodeInjectionDirectiveContent = '') {
         const defaultDirective = '[SYSTEM_DIRECTIVE: You are a storyteller. The following <plot> block is your absolute script for this turn. You MUST follow the <directive> within it to generate the story.]';
         const baseDirective = String(finalSystemDirectiveContent || '').trim() || defaultDirective;
+        const codeDirective = String(finalCodeInjectionDirectiveContent || '').trim();
         const rawFallbackText = buildPlotRawFallbackText_ACU(taskResults);
-        const placeholderPattern = /\{\{(\w+)\}\}/g;
-        const placeholderNames = [];
-        let match;
-        while ((match = placeholderPattern.exec(baseDirective)) !== null) {
-            if (!isReservedPlotPassthroughPlaceholder_ACU(match[1])) {
-                placeholderNames.push(match[1]);
-            }
+        const hasAggregatedTags = aggregatedTags instanceof Map && aggregatedTags.size > 0;
+        const matchedTags = new Set();
+        const injectOnlyTagNamesLower = new Set(Array.from(injectOnlyTagNames).map((name) => String(name || '').toLowerCase()));
+        const basePlaceholders = collectDirectivePlaceholderNames_ACU(baseDirective);
+        const userSection = basePlaceholders.length > 0
+            ? replaceDirectivePlaceholders_ACU(baseDirective, aggregatedTags, matchedTags).rendered.trim()
+            : baseDirective;
+        if (!codeDirective) {
+            const trailingContent = hasAggregatedTags
+                ? collectUnusedTagBlocks_ACU(aggregatedTags, matchedTags, injectOnlyTagNamesLower)
+                : rawFallbackText;
+            return [userSection, trailingContent].filter(Boolean).join('\n');
         }
-        if (aggregatedTags instanceof Map && aggregatedTags.size > 0) {
-            if (placeholderNames.length > 0) {
-                const matchedTags = new Set();
-                const injectOnlyTagNamesLower = new Set(Array.from(injectOnlyTagNames).map((name) => String(name || '').toLowerCase()));
-                const finalDirectiveWithTags = baseDirective.replace(placeholderPattern, (placeholder, tagName) => {
-                    if (isReservedPlotPassthroughPlaceholder_ACU(tagName))
-                        return placeholder;
-                    const resolvedValue = getPlotTagMapValue_ACU(aggregatedTags, tagName);
-                    matchedTags.add(String(tagName || '').toLowerCase());
-                    if (resolvedValue.found) {
-                        matchedTags.add(String(resolvedValue.actualTagName || '').toLowerCase());
-                    }
-                    const contents = resolvedValue.value;
-                    if (hasMeaningfulTagContents_ACU(contents)) {
-                        return `<${tagName}>${(Array.isArray(contents) ? contents : [contents]).map(content => content ?? '').join('\n\n')}</${tagName}>`;
-                    }
-                    return '';
-                });
-                const unusedTagBlocks = [];
-                aggregatedTags.forEach((contents, tagName) => {
-                    const loweredTagName = String(tagName || '').toLowerCase();
-                    if (matchedTags.has(loweredTagName))
-                        return;
-                    // injectOnly 标签（extractInjectTags 提取的）即使未使用也不追加到末尾
-                    if (injectOnlyTagNamesLower.has(loweredTagName))
-                        return;
-                    if (!hasMeaningfulTagContents_ACU(contents))
-                        return;
-                    unusedTagBlocks.push(`<${tagName}>${(Array.isArray(contents) ? contents : [contents]).map(content => content ?? '').join('\n\n')}</${tagName}>`);
-                });
-                return [finalDirectiveWithTags.trim(), unusedTagBlocks.join('\n\n').trim()]
-                    .filter(Boolean)
-                    .join('\n');
-            }
-            // 没有占位符时：只追加非 injectOnly 的标签块
-            const filteredTags = new Map();
-            const injectOnlyTagNamesLower = new Set(Array.from(injectOnlyTagNames).map((name) => String(name || '').toLowerCase()));
-            aggregatedTags.forEach((contents, tagName) => {
-                if (!injectOnlyTagNamesLower.has(String(tagName || '').toLowerCase()) && hasMeaningfulTagContents_ACU(contents)) {
-                    filteredTags.set(tagName, contents);
+        const codePlaceholders = collectDirectivePlaceholderNames_ACU(codeDirective);
+        let codeSection = '';
+        let trailingContent = '';
+        if (hasAggregatedTags) {
+            if (codePlaceholders.length > 0) {
+                const codeResult = replaceDirectivePlaceholders_ACU(codeDirective, aggregatedTags, matchedTags);
+                if (codeResult.hasInjectedTag) {
+                    codeSection = codeResult.rendered.trim();
                 }
-            });
-            const aggregatedTagBlocks = buildAggregatedPlotTagBlocks_ACU(filteredTags);
-            return [baseDirective, aggregatedTagBlocks].filter(Boolean).join('\n');
+            }
+            trailingContent = collectUnusedTagBlocks_ACU(aggregatedTags, matchedTags, injectOnlyTagNamesLower);
+            if (codePlaceholders.length === 0 && trailingContent) {
+                codeSection = codeDirective;
+            }
         }
-        if (placeholderNames.length > 0) {
-            const finalDirectiveWithoutTags = baseDirective.replace(placeholderPattern, (placeholder, tagName) => (isReservedPlotPassthroughPlaceholder_ACU(tagName) ? placeholder : ''));
-            return [finalDirectiveWithoutTags.trim(), rawFallbackText].filter(Boolean).join('\n');
+        else if (rawFallbackText) {
+            if (codePlaceholders.length === 0) {
+                codeSection = codeDirective;
+            }
+            trailingContent = rawFallbackText;
         }
-        return [baseDirective, rawFallbackText].filter(Boolean).join('\n');
+        const codeBlock = [codeSection, trailingContent].filter(Boolean).join('\n');
+        return [userSection, codeBlock].filter(Boolean).join('\n\n');
     }
 
     function normalizeId_ACU(value) {
@@ -69754,21 +69803,29 @@ $CONTENT
             return processed;
         };
         // 世界书后处理已在任务级逻辑中完成；共享阶段不再做后处理
+        const renderPlotDirectiveTemplate = async (template) => {
+            let rendered = String(template || '');
+            if (!rendered.trim())
+                return '';
+            rendered = await resolveTableWorldbookTokens(rendered);
+            rendered = await tryRenderPlotTemplateWithEjs_ACU(rendered);
+            rendered = performReplacements(rendered);
+            rendered = parseRandomTags_ACU(rendered);
+            rendered = replaceRandomVariables_ACU(rendered);
+            // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下）
+            rendered = replaceDbSqlVariables(rendered);
+            return rendered ? rendered.trim() : '';
+        };
         const defaultDirective = '[SYSTEM_DIRECTIVE: You are a storyteller. The following <plot> block is your absolute script for this turn. You MUST follow the <directive> within it to generate the story.]';
-        let finalSystemDirectiveContent = defaultDirective;
-        let rawFinal = getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective')
+        const rawFinal = getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective')
             || plotSettings.finalSystemDirective
             || '';
-        rawFinal = await resolveTableWorldbookTokens(rawFinal);
-        rawFinal = await tryRenderPlotTemplateWithEjs_ACU(rawFinal);
-        const plotFinalDirective = performReplacements(rawFinal);
-        let finalWithRandom = parseRandomTags_ACU(plotFinalDirective);
-        finalWithRandom = replaceRandomVariables_ACU(finalWithRandom);
-        // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下）
-        finalWithRandom = replaceDbSqlVariables(finalWithRandom);
-        if (finalWithRandom && finalWithRandom.trim()) {
-            finalSystemDirectiveContent = finalWithRandom.trim();
-        }
+        const renderedFinal = await renderPlotDirectiveTemplate(rawFinal);
+        const finalSystemDirectiveContent = renderedFinal || defaultDirective;
+        const rawCodeInjectionDirective = typeof plotSettings.finalCodeInjectionDirective === 'string'
+            ? plotSettings.finalCodeInjectionDirective
+            : '';
+        const finalCodeInjectionDirectiveContent = await renderPlotDirectiveTemplate(rawCodeInjectionDirective);
         let seedContentForConditional = '';
         try {
             seedContentForConditional = getLatestAIMessageContent_ACU();
@@ -69784,6 +69841,7 @@ $CONTENT
             performReplacements,
             resolveTableWorldbookTokens,
             finalSystemDirectiveContent,
+            finalCodeInjectionDirectiveContent,
             seedContentForConditional,
             recentContextMessages: Array.isArray(agentContextMessages) ? agentContextMessages : [],
             allTablesJson: currentJsonTableData_ACU,
@@ -70305,7 +70363,9 @@ $CONTENT
                 checkPlotAbortRequested_ACU();
                 await applyAgentFinalGreenlights_ACU(agentDecision);
             }
-            const finalMessage = buildFinalPlotInjectionMessage_ACU(sharedContext.finalSystemDirectiveContent, successfulResults, aggregatedTags, aggregatedInjectOnlyTagNames);
+            const finalMessage = sharedContext.finalCodeInjectionDirectiveContent
+                ? buildFinalPlotInjectionMessage_ACU(sharedContext.finalSystemDirectiveContent, successfulResults, aggregatedTags, aggregatedInjectOnlyTagNames, sharedContext.finalCodeInjectionDirectiveContent)
+                : buildFinalPlotInjectionMessage_ACU(sharedContext.finalSystemDirectiveContent, successfulResults, aggregatedTags, aggregatedInjectOnlyTagNames);
             const saveContent = buildPlotSaveContentFromTaskResults_ACU(successfulResults);
             const userInputHash = hashUserInput_ACU(inputForHash);
             const finalMessageHash = hashUserInput_ACU(finalMessage);
@@ -82710,6 +82770,7 @@ $CONTENT
         ensurePlotTasksCompat_ACU(snapshot, { syncLegacy: true });
         snapshot.plotTasks = stripPlotTaskRuntimeApiPresetFields_ACU(snapshot.plotTasks);
         snapshot.finalSystemDirective = getPlotFinalDirectiveFromSource_ACU(snapshot);
+        snapshot.finalCodeInjectionDirective = getPlotCodeInjectionDirectiveFromSource_ACU(snapshot);
         setPlotPromptContentByIdForSettings_ACU(snapshot, 'finalSystemDirective', snapshot.finalSystemDirective || '');
         return snapshot;
     }
@@ -131099,14 +131160,16 @@ Expected function or array of functions, received type ${typeof value}.`
         const tasks = ref([]);
         const currentTaskId = ref('');
         const finalDirective = ref('');
+        const finalCodeDirective = ref('');
         const currentTask = computed(() => tasks.value.find(t => t.id === currentTaskId.value) || null);
-        function loadFromRaw(rawTasks, rawFinalDirective) {
+        function loadFromRaw(rawTasks, rawFinalDirective, rawFinalCodeDirective = '') {
             const list = tasksFromRaw(Array.isArray(rawTasks) ? rawTasks : []);
             if (list.length === 0)
                 list.push(makeDefaultTask(0));
             tasks.value = list;
             currentTaskId.value = list[0].id;
             finalDirective.value = String(rawFinalDirective || '');
+            finalCodeDirective.value = String(rawFinalCodeDirective || '');
         }
         function selectTask(taskId) {
             if (tasks.value.some(t => t.id === taskId))
@@ -131237,6 +131300,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 },
             }));
             out.finalSystemDirective = finalDirective.value;
+            out.finalCodeInjectionDirective = finalCodeDirective.value;
             return out;
         }
         return {
@@ -131244,6 +131308,7 @@ Expected function or array of functions, received type ${typeof value}.`
             currentTaskId,
             currentTask,
             finalDirective,
+            finalCodeDirective,
             loadFromRaw,
             selectTask,
             addTask,
@@ -131370,6 +131435,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 directRecall: directRecallWhenBelowThreshold.value,
                 tasks: taskEditing.tasks.value,
                 directive: taskEditing.finalDirective.value,
+                codeDirective: taskEditing.finalCodeDirective.value,
             });
         }
         function saveSnapshot() {
@@ -131396,6 +131462,7 @@ Expected function or array of functions, received type ${typeof value}.`
             taskEditing.tasks.value = [];
             taskEditing.currentTaskId.value = '';
             taskEditing.finalDirective.value = '';
+            taskEditing.finalCodeDirective.value = '';
             initialSnapshot.value = '';
         }
         function openManage() {
@@ -131411,7 +131478,7 @@ Expected function or array of functions, received type ${typeof value}.`
             contextRules.excludeRules = normalizeRulePairs(raw.contextExcludeRules, raw.contextExcludeTags || '', 'exclude');
             Object.assign(draftRates, readDraftRates(raw));
             directRecallWhenBelowThreshold.value = raw.directRecallWhenBelowThreshold === true;
-            taskEditing.loadFromRaw(raw.plotTasks || [], raw.finalSystemDirective || '');
+            taskEditing.loadFromRaw(raw.plotTasks || [], raw.finalSystemDirective || '', raw.finalCodeInjectionDirective || '');
             error.value = '';
             drawerView.value = 'create';
             saveSnapshot();
@@ -131429,7 +131496,7 @@ Expected function or array of functions, received type ${typeof value}.`
             contextRules.excludeRules = normalizeRulePairs(target.raw?.contextExcludeRules, target.raw?.contextExcludeTags || '', 'exclude');
             Object.assign(draftRates, readDraftRates(target.raw || null));
             directRecallWhenBelowThreshold.value = target.raw?.directRecallWhenBelowThreshold === true;
-            taskEditing.loadFromRaw(target.raw?.plotTasks || [], target.raw?.finalSystemDirective || '');
+            taskEditing.loadFromRaw(target.raw?.plotTasks || [], target.raw?.finalSystemDirective || '', target.raw?.finalCodeInjectionDirective || '');
             error.value = '';
             drawerView.value = 'edit';
             saveSnapshot();
@@ -132997,8 +133064,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-drawer__create-btn[data-v-99f1d745] {\r\n  width: 100%;\n}\n.acu-v2-plot-drawer__empty[data-v-99f1d745] {\r\n  margin-top: 20px;\n}\n.acu-v2-plot-drawer__actions[data-v-99f1d745] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  padding-top: 12px;\r\n  margin-top: 12px;\n}\r\n\r\n/* manage list */\n.acu-v2-manage-list[data-v-99f1d745] {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item[data-v-99f1d745] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item[data-v-99f1d745]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info[data-v-99f1d745] {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name[data-v-99f1d745] {\r\n  display: block;\r\n  font-size: var(--acu-font-size-list-title, 13px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  font-weight: 500;\r\n  color: var(--acu-text-1);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta[data-v-99f1d745] {\r\n  display: block;\r\n  margin-top: 2px;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions[data-v-99f1d745] {\r\n  display: flex;\r\n  gap: 4px;\n}\r\n\r\n/* form */\n.acu-v2-form[data-v-99f1d745] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-form__section[data-v-99f1d745] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-form__section[data-v-99f1d745]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-form__section legend[data-v-99f1d745] {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-drawer__rules[data-v-99f1d745] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-error[data-v-99f1d745] {\r\n  padding: 8px 10px;\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\n}\r\n", "src/presentation-v2/components/PlotPresetDrawer.vue#style-0-99f1d745");
-    var PlotPresetDrawer_vue_vue_type_style_index_0_scoped_99f1d745_lang = null;
+    injectSfcStyle("\n.acu-v2-plot-drawer__create-btn[data-v-d04cefd5] {\r\n  width: 100%;\n}\n.acu-v2-plot-drawer__empty[data-v-d04cefd5] {\r\n  margin-top: 20px;\n}\n.acu-v2-plot-drawer__actions[data-v-d04cefd5] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  padding-top: 12px;\r\n  margin-top: 12px;\n}\r\n\r\n/* manage list */\n.acu-v2-manage-list[data-v-d04cefd5] {\r\n  list-style: none;\r\n  margin: 0;\r\n  padding: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\n}\n.acu-v2-manage-item[data-v-d04cefd5] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n  padding: 10px 12px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-manage-item[data-v-d04cefd5]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-manage-item__info[data-v-d04cefd5] {\r\n  flex: 1;\r\n  min-width: 0;\n}\n.acu-v2-manage-item__name[data-v-d04cefd5] {\r\n  display: block;\r\n  font-size: var(--acu-font-size-list-title, 13px);\r\n  line-height: var(--acu-line-height-body, 1.45);\r\n  font-weight: 500;\r\n  color: var(--acu-text-1);\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-manage-item__meta[data-v-d04cefd5] {\r\n  display: block;\r\n  margin-top: 2px;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-manage-item__actions[data-v-d04cefd5] {\r\n  display: flex;\r\n  gap: 4px;\n}\r\n\r\n/* form */\n.acu-v2-form[data-v-d04cefd5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-form__section[data-v-d04cefd5] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-form__section[data-v-d04cefd5]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-form__section legend[data-v-d04cefd5] {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-drawer__rules[data-v-d04cefd5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-error[data-v-d04cefd5] {\r\n  padding: 8px 10px;\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\n}\r\n", "src/presentation-v2/components/PlotPresetDrawer.vue#style-0-d04cefd5");
+    var PlotPresetDrawer_vue_vue_type_style_index_0_scoped_d04cefd5_lang = null;
 
     const _hoisted_1$G = {
 	key: 0,
@@ -133018,8 +133085,8 @@ Expected function or array of functions, received type ${typeof value}.`
 		"show-back": $props.view === "create" || $props.view === "edit",
 		"before-close": $props.beforeClose,
 		width: "720px",
-		onClose: _cache[16] || (_cache[16] = ($event) => _ctx.$emit("close")),
-		onBack: _cache[17] || (_cache[17] = ($event) => _ctx.$emit("back"))
+		onClose: _cache[17] || (_cache[17] = ($event) => _ctx.$emit("close")),
+		onBack: _cache[18] || (_cache[18] = ($event) => _ctx.$emit("back"))
 	}, {
 		default: withCtx(() => [createCommentVNode(" MANAGE "), $props.view === "manage" ? (openBlock(), createElementBlock(
 			Fragment,
@@ -133029,7 +133096,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				class: "acu-v2-plot-drawer__create-btn",
 				onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("open-create"))
 			}, {
-				default: withCtx(() => [..._cache[18] || (_cache[18] = [createBaseVNode(
+				default: withCtx(() => [..._cache[19] || (_cache[19] = [createBaseVNode(
 					"i",
 					{ class: "fa-solid fa-plus" },
 					null,
@@ -133124,7 +133191,7 @@ Expected function or array of functions, received type ${typeof value}.`
 				variant: "empty",
 				class: "acu-v2-plot-drawer__empty"
 			}, {
-				default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+				default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 					"暂无预设，点击上方按钮从默认新建或导入。",
 					-1
 					/* CACHED */
@@ -133140,10 +133207,10 @@ Expected function or array of functions, received type ${typeof value}.`
 				"form",
 				{
 					class: "acu-v2-form",
-					onSubmit: _cache[15] || (_cache[15] = withModifiers(($event) => _ctx.$emit("save"), ["prevent"]))
+					onSubmit: _cache[16] || (_cache[16] = withModifiers(($event) => _ctx.$emit("save"), ["prevent"]))
 				},
 				[
-					createBaseVNode("fieldset", _hoisted_4$q, [_cache[20] || (_cache[20] = createBaseVNode(
+					createBaseVNode("fieldset", _hoisted_4$q, [_cache[21] || (_cache[21] = createBaseVNode(
 						"legend",
 						null,
 						"基础信息",
@@ -133159,7 +133226,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						_: 1
 					})]),
 					createBaseVNode("fieldset", _hoisted_5$k, [
-						_cache[22] || (_cache[22] = createBaseVNode(
+						_cache[23] || (_cache[23] = createBaseVNode(
 							"legend",
 							null,
 							"标签筛选",
@@ -133170,7 +133237,7 @@ Expected function or array of functions, received type ${typeof value}.`
 							variant: "hint",
 							class: "acu-v2-form__hint"
 						}, {
-							default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+							default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 								" 专属于当前预设，随预设保存。按标签提取内容，提升推进准确性。提取仅保留指定范围，排除移除指定范围。 ",
 								-1
 								/* CACHED */
@@ -133239,18 +133306,41 @@ Expected function or array of functions, received type ${typeof value}.`
 						"api-preset-options",
 						"task-api-override"
 					]),
-					createBaseVNode("fieldset", _hoisted_7$g, [_cache[23] || (_cache[23] = createBaseVNode(
-						"legend",
-						null,
-						"最终注入指令",
-						-1
-						/* CACHED */
-					)), createVNode($setup["AcuTextarea"], {
-						"model-value": $props.taskEditing.finalDirective.value,
-						rows: 3,
-						placeholder: "该指令不会发给规划 AI；只在主 AI 生成时注入",
-						"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $props.taskEditing.finalDirective.value = $event)
-					}, null, 8, ["model-value"])]),
+					createBaseVNode("fieldset", _hoisted_7$g, [
+						_cache[24] || (_cache[24] = createBaseVNode(
+							"legend",
+							null,
+							"最终注入指令",
+							-1
+							/* CACHED */
+						)),
+						createVNode($setup["AcuFormRow"], {
+							label: "用户输入注入指令",
+							hint: "始终注入主 AI（通常包含 $8 本轮用户输入占位符）；不会发给规划 AI"
+						}, {
+							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+								"model-value": $props.taskEditing.finalDirective.value,
+								rows: 3,
+								"data-acu-plot-directive": "user",
+								placeholder: "该指令不会发给规划 AI；只在主 AI 生成时始终注入",
+								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $props.taskEditing.finalDirective.value = $event)
+							}, null, 8, ["model-value"])]),
+							_: 1
+						}),
+						createVNode($setup["AcuFormRow"], {
+							label: "编码注入指令",
+							hint: "仅在存在有效召回编码或可注入结果时拼接（支持 {{recall}} 占位符）；留空则沿用旧版单段拼接"
+						}, {
+							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+								"model-value": $props.taskEditing.finalCodeDirective.value,
+								rows: 4,
+								"data-acu-plot-directive": "code",
+								placeholder: "可选：如「召回记忆条目编码:\\n{{recall}}」；未触发召回或无编码结果时自动省略",
+								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $props.taskEditing.finalCodeDirective.value = $event)
+							}, null, 8, ["model-value"])]),
+							_: 1
+						})
+					]),
 					$props.error ? (openBlock(), createBlock($setup["AcuText"], {
 						key: 1,
 						variant: "error",
@@ -133264,8 +133354,8 @@ Expected function or array of functions, received type ${typeof value}.`
 						)]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
-					createBaseVNode("footer", _hoisted_8$f, [createVNode($setup["AcuButton"], { onClick: _cache[14] || (_cache[14] = ($event) => _ctx.$emit("back")) }, {
-						default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
+					createBaseVNode("footer", _hoisted_8$f, [createVNode($setup["AcuButton"], { onClick: _cache[15] || (_cache[15] = ($event) => _ctx.$emit("back")) }, {
+						default: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
 							"关闭",
 							-1
 							/* CACHED */
@@ -133275,7 +133365,7 @@ Expected function or array of functions, received type ${typeof value}.`
 						variant: "primary",
 						"native-type": "submit"
 					}, {
-						default: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
+						default: withCtx(() => [..._cache[26] || (_cache[26] = [createTextVNode(
 							"保存预设",
 							-1
 							/* CACHED */
@@ -133297,7 +133387,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		"before-close"
 	]);
     }
-    var PlotPresetDrawer = /*#__PURE__*/ _export_sfc(_sfc_main$G, [["render", _sfc_render$G], ["__scopeId", "data-v-99f1d745"]]);
+    var PlotPresetDrawer = /*#__PURE__*/ _export_sfc(_sfc_main$G, [["render", _sfc_render$G], ["__scopeId", "data-v-d04cefd5"]]);
 
     var _sfc_main$F = /*@__PURE__*/ defineComponent({
         __name: 'PlotPresetPanel',

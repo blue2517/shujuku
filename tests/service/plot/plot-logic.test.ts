@@ -109,6 +109,7 @@ import {
   getLegacyPromptTextsFromPromptGroup_ACU,
   getPlotPromptGroupFromSource_ACU,
   getPlotFinalDirectiveFromSource_ACU,
+  getPlotCodeInjectionDirectiveFromSource_ACU,
   normalizePlotTask_ACU,
   normalizePlotTasks_ACU,
   normalizePlotPresetSelectionValue_ACU,
@@ -998,5 +999,53 @@ describe('applyGlobalPlotPresetSelectionForEditor_ACU', () => {
     if (result && typeof result === 'object') {
       expect(result.isDefault).toBe(true);
     }
+  });
+});
+
+// ═══ finalCodeInjectionDirective 同步与提取 ═══
+describe('finalCodeInjectionDirective 规范化与预设应用', () => {
+  it('getPlotCodeInjectionDirectiveFromSource_ACU 正确读取字符串字段并兼容旧数据', () => {
+    expect(getPlotCodeInjectionDirectiveFromSource_ACU({ finalCodeInjectionDirective: '编码指令' })).toBe('编码指令');
+    expect(getPlotCodeInjectionDirectiveFromSource_ACU({ finalCodeInjectionDirective: '' })).toBe('');
+    expect(getPlotCodeInjectionDirectiveFromSource_ACU({ finalSystemDirective: '仅用户输入' })).toBe('');
+    expect(getPlotCodeInjectionDirectiveFromSource_ACU(null)).toBe('');
+  });
+
+  it('normalizePlotPresetExcludeRules_ACU 保留并规范化 finalCodeInjectionDirective', () => {
+    const normalized = normalizePlotPresetExcludeRules_ACU({
+      name: '分离测试',
+      finalSystemDirective: '用户=$8',
+      finalCodeInjectionDirective: '编码:\n{{recall}}',
+    });
+    expect(normalized.finalSystemDirective).toBe('用户=$8');
+    expect(normalized.finalCodeInjectionDirective).toBe('编码:\n{{recall}}');
+
+    const legacy = normalizePlotPresetExcludeRules_ACU({
+      name: '旧预设',
+      finalSystemDirective: '旧合一指令',
+    });
+    expect(legacy.finalCodeInjectionDirective).toBe('');
+  });
+
+  it('applyPlotPresetToSettings_ACU 切换预设时更新并重置 finalCodeInjectionDirective', () => {
+    const plotSettings: any = {
+      prompts: [],
+      loopSettings: {},
+      finalCodeInjectionDirective: '默认残留编码指令',
+    };
+    const resultWithCode = applyPlotPresetToSettings_ACU(plotSettings, {
+      name: '预设含编码',
+      finalSystemDirective: '用户指令',
+      finalCodeInjectionDirective: '编码注入指令',
+    });
+    expect(plotSettings.finalCodeInjectionDirective).toBe('编码注入指令');
+    expect(resultWithCode.finalCodeDirective).toBe('编码注入指令');
+
+    const resultLegacy = applyPlotPresetToSettings_ACU(plotSettings, {
+      name: '旧预设无编码',
+      finalSystemDirective: '旧指令',
+    });
+    expect(plotSettings.finalCodeInjectionDirective).toBe('');
+    expect(resultLegacy.finalCodeDirective).toBe('');
   });
 });

@@ -171,17 +171,19 @@ export function usePlotTaskEditing() {
   const tasks = ref<PlotTaskDraft[]>([]);
   const currentTaskId = ref<string>('');
   const finalDirective = ref<string>('');
+  const finalCodeDirective = ref<string>('');
 
   const currentTask = computed<PlotTaskDraft | null>(
     () => tasks.value.find(t => t.id === currentTaskId.value) || null,
   );
 
-  function loadFromRaw(rawTasks: any[], rawFinalDirective: string): void {
+  function loadFromRaw(rawTasks: any[], rawFinalDirective: string, rawFinalCodeDirective: string = ''): void {
     const list = tasksFromRaw(Array.isArray(rawTasks) ? rawTasks : []);
     if (list.length === 0) list.push(makeDefaultTask(0));
     tasks.value = list;
     currentTaskId.value = list[0].id;
     finalDirective.value = String(rawFinalDirective || '');
+    finalCodeDirective.value = String(rawFinalCodeDirective || '');
   }
 
   function selectTask(taskId: string): void {
@@ -305,6 +307,7 @@ export function usePlotTaskEditing() {
       },
     }));
     out.finalSystemDirective = finalDirective.value;
+    out.finalCodeInjectionDirective = finalCodeDirective.value;
     return out;
   }
 
@@ -313,6 +316,7 @@ export function usePlotTaskEditing() {
     currentTaskId,
     currentTask,
     finalDirective,
+    finalCodeDirective,
     loadFromRaw,
     selectTask,
     addTask,

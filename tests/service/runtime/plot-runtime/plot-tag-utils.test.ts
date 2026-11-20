@@ -395,4 +395,92 @@ describe('buildFinalPlotInjectionMessage_ACU', () => {
     expect(buildFinalPlotInjectionMessage_ACU('{{plot}}\n{{no_tool}}', [], tags)).toBe('<plot>剧情内容</plot>\n{{no_tool}}');
     expect(buildFinalPlotInjectionMessage_ACU('{{plot}}\n{{no_tool}}', [], new Map())).toBe('{{no_tool}}');
   });
+
+  it('分离编码注入指令且命中标签时（无占位符），分两段拼接用户输入指令与编码注入块', () => {
+    const tags = new Map<string, any>([['recall', ['a1, a2']]]);
+    const result = buildFinalPlotInjectionMessage_ACU(
+      '<本轮用户输入>\n你好\n</本轮用户输入>',
+      [],
+      tags,
+      new Set(),
+      '召回记忆条目编码:',
+    );
+    expect(result).toBe('<本轮用户输入>\n你好\n</本轮用户输入>\n\n召回记忆条目编码:\n<recall>a1, a2</recall>');
+  });
+
+  it('分离编码注入指令包含 {{recall}} 占位符并命中有效标签时，替换占位符并保留说明', () => {
+    const tags = new Map<string, any>([['recall', ['b3']]]);
+    const result = buildFinalPlotInjectionMessage_ACU(
+      '<本轮用户输入>\n你好\n</本轮用户输入>',
+      [],
+      tags,
+      new Set(),
+      '以下输入的代码为索引编码：\n{{recall}}',
+    );
+    expect(result).toBe('<本轮用户输入>\n你好\n</本轮用户输入>\n\n以下输入的代码为索引编码：\n<recall>b3</recall>');
+  });
+
+  it('分离编码注入指令但无任何有效编码或标签时（空 Map / 仅空白标签 / 仅 injectOnly），省略编码注入指令', () => {
+    const emptyMapResult = buildFinalPlotInjectionMessage_ACU(
+      '<本轮用户输入>\n你好\n</本轮用户输入>',
+      [],
+      new Map(),
+      new Set(),
+      '召回记忆条目编码:',
+    );
+    expect(emptyMapResult).toBe('<本轮用户输入>\n你好\n</本轮用户输入>');
+
+    const blankRecallResult = buildFinalPlotInjectionMessage_ACU(
+      '<本轮用户输入>\n你好\n</本轮用户输入>',
+      [{ success: true, rawResponse: '<recall>\n\n</recall>' }],
+      new Map<string, any>([['recall', ['\n\n']]]),
+      new Set(),
+      '以下输入的代码为索引编码：\n{{recall}}',
+    );
+    expect(blankRecallResult).toBe('<本轮用户输入>\n你好\n</本轮用户输入>');
+
+    const injectOnlyResult = buildFinalPlotInjectionMessage_ACU(
+      '<本轮用户输入>\n你好\n</本轮用户输入>',
+      [],
+      new Map<string, any>([['secret', ['仅注入']]]),
+      new Set(['secret']),
+      '召回记忆条目编码:',
+    );
+    expect(injectOnlyResult).toBe('<本轮用户输入>\n你好\n</本轮用户输入>');
+  });
+
+  it('编码注入指令含 {{recall}} 但 <recall> 为空、同时存在其他非占位符标签时，不输出编码说明头但保留其他标签', () => {
+    const tags = new Map<string, any>([
+      ['recall', ['   ']],
+      ['supplement', ['补充设定']],
+    ]);
+    const result = buildFinalPlotInjectionMessage_ACU(
+      '<本轮用户输入>\n你好\n</本轮用户输入>',
+      [],
+      tags,
+      new Set(),
+      '以下输入的代码为索引编码：\n{{recall}}',
+    );
+    expect(result).toBe('<本轮用户输入>\n你好\n</本轮用户输入>\n\n<supplement>补充设定</supplement>');
+  });
+
+  it('无标签但存在 rawFallbackText 时，无占位符编码指令正常拼接，含占位符编码指令被省略', () => {
+    const noPlaceholder = buildFinalPlotInjectionMessage_ACU(
+      '<本轮用户输入>\n你好\n</本轮用户输入>',
+      [{ success: true, rawResponse: 'a1' }],
+      new Map(),
+      new Set(),
+      '召回记忆条目编码:',
+    );
+    expect(noPlaceholder).toBe('<本轮用户输入>\n你好\n</本轮用户输入>\n\n召回记忆条目编码:\na1');
+
+    const withPlaceholder = buildFinalPlotInjectionMessage_ACU(
+      '<本轮用户输入>\n你好\n</本轮用户输入>',
+      [{ success: true, rawResponse: '纯文本结果' }],
+      new Map(),
+      new Set(),
+      '以下输入的代码为索引编码：\n{{recall}}',
+    );
+    expect(withPlaceholder).toBe('<本轮用户输入>\n你好\n</本轮用户输入>\n\n纯文本结果');
+  });
 });

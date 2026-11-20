@@ -136,6 +136,13 @@ export function getPlotFinalDirectiveFromSource_ACU(source: Record<string, any> 
       || '';
 }
 
+export function getPlotCodeInjectionDirectiveFromSource_ACU(source: Record<string, any> | null) {
+    if (!source || typeof source !== 'object') return '';
+    return typeof source.finalCodeInjectionDirective === 'string'
+      ? source.finalCodeInjectionDirective
+      : '';
+}
+
 // ═══ 任务规范化 ═══
 
 function hasOwnField_ACU(source: Record<string, any>, key: string) {
@@ -459,6 +466,7 @@ export function setActivePlotEditorSettings_ACU(plotSettings: Record<string, any
     ensureLoopPromptsArray_ACU(activePlotEditorSettings_ACU);
     ensurePlotTasksCompat_ACU(activePlotEditorSettings_ACU, { syncLegacy: true });
     activePlotEditorSettings_ACU.finalSystemDirective = getPlotFinalDirectiveFromSource_ACU(activePlotEditorSettings_ACU);
+    activePlotEditorSettings_ACU.finalCodeInjectionDirective = getPlotCodeInjectionDirectiveFromSource_ACU(activePlotEditorSettings_ACU);
     setPlotPromptContentByIdForSettings_ACU(
       activePlotEditorSettings_ACU,
       'finalSystemDirective',
@@ -484,17 +492,19 @@ function cloneDefaultPlotSettingsForPreset_ACU() {
 
 export function applyPlotPresetToSettings_ACU(plotSettings: Record<string, any>, preset: Record<string, any> | null) {
     if (!plotSettings || !preset) {
-      return { normalizedPreset: null, promptGroup: [], finalDirective: '' };
+      return { normalizedPreset: null, promptGroup: [], finalDirective: '', finalCodeDirective: '' };
     }
     const preservedEnabled = plotSettings.enabled === true;
     const normalizedPreset = normalizePlotPresetExcludeRules_ACU(preset);
     const finalDirective = getPlotFinalDirectiveFromSource_ACU(normalizedPreset);
+    const finalCodeDirective = getPlotCodeInjectionDirectiveFromSource_ACU(normalizedPreset);
     ensurePlotPromptsArray_ACU(plotSettings);
     ensureLoopPromptsArray_ACU(plotSettings);
     plotSettings.enabled = preservedEnabled;
     plotSettings.plotTasks = normalizePlotTasks_ACU(normalizedPreset);
     plotSettings.promptGroup = JSON.parse(JSON.stringify(getPlotPromptGroupFromSource_ACU(normalizedPreset)));
     plotSettings.finalSystemDirective = finalDirective || '';
+    plotSettings.finalCodeInjectionDirective = finalCodeDirective || '';
     setPlotPromptContentByIdForSettings_ACU(plotSettings, 'finalSystemDirective', finalDirective || '');
     plotSettings.rateMain = normalizedPreset.rateMain ?? 1.0;
     plotSettings.ratePersonal = normalizedPreset.ratePersonal ?? 1.0;
@@ -520,10 +530,12 @@ export function applyPlotPresetToSettings_ACU(plotSettings: Record<string, any>,
     ensureLoopPromptsArray_ACU(plotSettings);
     ensurePlotTasksCompat_ACU(plotSettings, { syncLegacy: true });
     plotSettings.finalSystemDirective = getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective') || plotSettings.finalSystemDirective || '';
+    plotSettings.finalCodeInjectionDirective = finalCodeDirective || '';
     return {
       normalizedPreset,
       promptGroup: JSON.parse(JSON.stringify(plotSettings.promptGroup || [])),
       finalDirective: getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective') || '',
+      finalCodeDirective: plotSettings.finalCodeInjectionDirective || '',
     };
 }
 
@@ -573,6 +585,7 @@ export function replaceCurrentPlotSettingsWithSnapshot_ACU(plotSettings: Record<
     ensureLoopPromptsArray_ACU(plotSettings);
     ensurePlotTasksCompat_ACU(plotSettings, { syncLegacy: true });
     plotSettings.finalSystemDirective = getPlotFinalDirectiveFromSource_ACU(plotSettings);
+    plotSettings.finalCodeInjectionDirective = getPlotCodeInjectionDirectiveFromSource_ACU(plotSettings);
     setPlotPromptContentByIdForSettings_ACU(plotSettings, 'finalSystemDirective', plotSettings.finalSystemDirective || '');
     return plotSettings;
 }
@@ -596,6 +609,7 @@ export function normalizePlotPresetExcludeRules_ACU(preset: Record<string, any> 
     cloned.contextExcludeRules = normalizeExcludeRules_ACU(cloned.contextExcludeRules, cloned.contextExcludeTags || '');
     cloned.plotTasks = stripPlotTaskRuntimeApiPresetFields_ACU(normalizePlotTasks_ACU(cloned));
     cloned.finalSystemDirective = getPlotFinalDirectiveFromSource_ACU(cloned);
+    cloned.finalCodeInjectionDirective = getPlotCodeInjectionDirectiveFromSource_ACU(cloned);
     ensurePlotTasksCompat_ACU(cloned, { syncLegacy: true });
     cloned.plotTasks = stripPlotTaskRuntimeApiPresetFields_ACU(normalizePlotTasks_ACU(cloned));
     setPlotPromptContentByIdForSettings_ACU(cloned, 'finalSystemDirective', cloned.finalSystemDirective || '');
@@ -856,6 +870,7 @@ function buildPlotSettingsPreviewFromPreset_ACU(presetName: string) {
     ensureLoopPromptsArray_ACU(previewSettings);
     ensurePlotTasksCompat_ACU(previewSettings, { syncLegacy: true });
     previewSettings.finalSystemDirective = getPlotFinalDirectiveFromSource_ACU(previewSettings);
+    previewSettings.finalCodeInjectionDirective = getPlotCodeInjectionDirectiveFromSource_ACU(previewSettings);
     setPlotPromptContentByIdForSettings_ACU(previewSettings, 'finalSystemDirective', previewSettings.finalSystemDirective || '');
     return previewSettings;
 }

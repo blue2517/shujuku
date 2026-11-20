@@ -151,12 +151,24 @@
 
       <fieldset class="acu-v2-form__section">
         <legend>最终注入指令</legend>
-        <AcuTextarea
-          :model-value="taskEditing.finalDirective.value"
-          :rows="3"
-          placeholder="该指令不会发给规划 AI；只在主 AI 生成时注入"
-          @update:model-value="taskEditing.finalDirective.value = $event"
-        />
+        <AcuFormRow label="用户输入注入指令" hint="始终注入主 AI（通常包含 $8 本轮用户输入占位符）；不会发给规划 AI">
+          <AcuTextarea
+            :model-value="taskEditing.finalDirective.value"
+            :rows="3"
+            data-acu-plot-directive="user"
+            placeholder="该指令不会发给规划 AI；只在主 AI 生成时始终注入"
+            @update:model-value="taskEditing.finalDirective.value = $event"
+          />
+        </AcuFormRow>
+        <AcuFormRow label="编码注入指令" hint="仅在存在有效召回编码或可注入结果时拼接（支持 {{recall}} 占位符）；留空则沿用旧版单段拼接">
+          <AcuTextarea
+            :model-value="taskEditing.finalCodeDirective.value"
+            :rows="4"
+            data-acu-plot-directive="code"
+            placeholder="可选：如「召回记忆条目编码:\n{{recall}}」；未触发召回或无编码结果时自动省略"
+            @update:model-value="taskEditing.finalCodeDirective.value = $event"
+          />
+        </AcuFormRow>
       </fieldset>
 
       <AcuText v-if="error" variant="error" class="acu-v2-error" role="alert">{{

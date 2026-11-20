@@ -85,6 +85,8 @@ export interface PlotSettings_ACU {
   rateCuckold: number;
   recallCount: number;
   directRecallWhenBelowThreshold?: boolean;
+  finalSystemDirective?: string;
+  finalCodeInjectionDirective?: string;
   extractTags: string;
   contextExtractTags: string;
   contextExtractRules: unknown[];
