@@ -69913,13 +69913,17 @@ $CONTENT
         if (shouldDirectRecall) {
             const summaryInfo = extractAllAmCodesFromSummaryTable_ACU(sharedContext.allTablesJson);
             const recallCount = normalizePositiveInteger_ACU$1(sharedContext?.plotSettings?.recallCount, 20);
-            if (summaryInfo.totalCount <= recallCount) {
-                const recentExcludeCount = Math.max(0, Math.floor(Number(sharedContext.recentFixedExcludeCount) || 0));
+            const recentExcludeCount = Math.max(0, Math.floor(Number(sharedContext.recentFixedExcludeCount) || 0));
+            const directRecallThreshold = recallCount + recentExcludeCount;
+            if (summaryInfo.totalCount <= directRecallThreshold) {
                 const excludedCount = Math.min(recentExcludeCount, summaryInfo.codes.length);
                 const directCodes = excludedCount > 0
                     ? summaryInfo.codes.slice(0, Math.max(0, summaryInfo.codes.length - excludedCount))
                     : summaryInfo.codes;
-                logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 当前纪要条数(${summaryInfo.totalCount}) <= zhaohui(${recallCount})，命中本地直出规则，跳过 AI 请求`
+                const thresholdLabel = recentExcludeCount > 0
+                    ? `zhaohui(${recallCount}) + 固定排除(${recentExcludeCount}) = ${directRecallThreshold}`
+                    : `zhaohui(${recallCount})`;
+                logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 当前纪要条数(${summaryInfo.totalCount}) <= ${thresholdLabel}，命中本地直出规则，跳过 AI 请求`
                     + (excludedCount > 0 ? `（已固定排除最新 ${excludedCount} 条，输出剩余 ${directCodes.length} 条编码）。` : '。'));
                 const rawResponse = excludedCount > 0
                     ? buildDirectRecallTaskResponse_ACU(directCodes, normalizedTask, {
@@ -132276,8 +132280,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-plot-match-fields[data-v-166b0633] {\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend[data-v-166b0633] {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid[data-v-166b0633] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-plot-match-fields__toggle-row[data-v-166b0633] {\r\n  margin-top: 4px;\n}\r\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0-166b0633");
-    var PlotMatchReplaceFields_vue_vue_type_style_index_0_scoped_166b0633_lang = null;
+    injectSfcStyle("\n.acu-v2-plot-match-fields[data-v-456055ec] {\r\n  margin: 0;\r\n  padding: 0 0 14px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-plot-match-fields legend[data-v-456055ec] {\r\n  padding: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-section-title, 12px);\r\n  font-weight: 600;\n}\n.acu-v2-plot-match-fields__grid[data-v-456055ec] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-plot-match-fields__toggle-row[data-v-456055ec] {\r\n  margin-top: 4px;\n}\r\n", "src/presentation-v2/components/PlotMatchReplaceFields.vue#style-0-456055ec");
+    var PlotMatchReplaceFields_vue_vue_type_style_index_0_scoped_456055ec_lang = null;
 
     const _hoisted_1$K = { class: "acu-v2-plot-match-fields" };
     const _hoisted_2$D = { class: "acu-v2-plot-match-fields__grid" };
@@ -132352,7 +132356,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		]),
 		createBaseVNode("div", _hoisted_3$x, [createVNode($setup["AcuFormRow"], {
 			label: "纪要不足时本地直出",
-			hint: "开启后，当大纲/纪要条数 ≤ zhaohui 时跳过 AI 推进请求，直接提取索引编码注入最终提示词（会自动排除「固定排除」设置的最新 N 条），降低延迟并节省 Token。"
+			hint: "开启后，当大纲/纪要条数 ≤ zhaohui + 固定排除数 时跳过 AI 推进请求，直接提取排除最新 N 条后的全部候选编码注入最终提示词，降低延迟并节省 Token。"
 		}, {
 			default: withCtx(() => [createVNode($setup["AcuToggle"], {
 				"model-value": !!$props.directRecallWhenBelowThreshold,
@@ -132362,7 +132366,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		})])
 	]);
     }
-    var PlotMatchReplaceFields = /*#__PURE__*/ _export_sfc(_sfc_main$L, [["render", _sfc_render$L], ["__scopeId", "data-v-166b0633"]]);
+    var PlotMatchReplaceFields = /*#__PURE__*/ _export_sfc(_sfc_main$L, [["render", _sfc_render$L], ["__scopeId", "data-v-456055ec"]]);
 
     const DEFAULT_ROLE_OPTIONS = [
         { value: 'SYSTEM', label: 'SYSTEM' },

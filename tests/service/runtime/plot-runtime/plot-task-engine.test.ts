@@ -2516,6 +2516,92 @@ describe('runPlotTasksRuntime_ACU', () => {
     expect(result.successfulResults).toHaveLength(1);
   });
 
+  it('当 directRecallWhenBelowThreshold 开启且 recallCount < 纪要条数 <= recallCount + recentFixedExcludeCount 时仍命中本地直出并排除最新 N 条', async () => {
+    mockGetCurrentVectorMemoryConfig.mockReturnValue({
+      summaryIndexPlotInjectColumns: [],
+      recentFixedExcludeCount: 4,
+    });
+    const allCodes = Array.from({ length: 24 }, (_, i) => `AM${String(i + 1).padStart(4, '0')}`);
+    mockExtractAllAmCodesFromSummaryTable.mockReturnValue({
+      totalCount: 24,
+      codes: allCodes,
+      foundTable: true,
+    });
+    mockBuildDirectRecallTaskResponse.mockImplementation((codes: string[]) => `<recall>\n${codes.join(', ')}\n</recall>`);
+    mockExtractPlotTagsFromResponse.mockImplementation((raw: string) => ({
+      tagNames: ['recall'],
+      extractedTags: { recall: raw.replace(/<\/?recall>/g, '').trim() },
+      injectedFragments: [raw],
+      injectOnlyTags: {},
+      injectOnlyFragments: [],
+      injectOnlyTagNames: [],
+    }));
+
+    const plotSettings = {
+      directRecallWhenBelowThreshold: true,
+      recallCount: 20,
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '请召回记忆' }],
+        },
+      ],
+    };
+
+    const result = await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockCallApiWithPlotPreset).not.toHaveBeenCalled();
+    expect(mockBuildDirectRecallTaskResponse).toHaveBeenCalledWith(
+      allCodes.slice(0, 20),
+      expect.objectContaining({ id: 'recall-task' }),
+      { totalCount: 24, excludedCount: 4 },
+    );
+    expect(result.successfulResults).toHaveLength(1);
+    expect(result.successfulResults[0].extractedTags.recall).toBe(allCodes.slice(0, 20).join(', '));
+    expect(mockLogDebug).toHaveBeenCalledWith(
+      expect.stringContaining('zhaohui(20) + 固定排除(4) = 24'),
+    );
+  });
+
+  it('当 directRecallWhenBelowThreshold 开启且纪要条数超过 recallCount + recentFixedExcludeCount 时停止本地直出并发起 AI 请求', async () => {
+    mockGetCurrentVectorMemoryConfig.mockReturnValue({
+      summaryIndexPlotInjectColumns: [],
+      recentFixedExcludeCount: 4,
+    });
+    mockExtractAllAmCodesFromSummaryTable.mockReturnValue({
+      totalCount: 25,
+      codes: Array.from({ length: 25 }, (_, i) => `AM${String(i + 1).padStart(4, '0')}`),
+      foundTable: true,
+    });
+
+    const plotSettings = {
+      directRecallWhenBelowThreshold: true,
+      recallCount: 20,
+      tasks: [
+        {
+          id: 'recall-task',
+          name: '记忆召回任务',
+          stage: 1,
+          order: 1,
+          maxRetries: 1,
+          extractTags: 'recall',
+          promptGroup: [{ role: 'user', content: '请召回记忆' }],
+        },
+      ],
+    };
+
+    const result = await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
+
+    expect(mockCallApiWithPlotPreset).toHaveBeenCalledTimes(1);
+    expect(mockBuildDirectRecallTaskResponse).not.toHaveBeenCalled();
+    expect(result.successfulResults).toHaveLength(1);
+  });
+
   it('交火模式开启且未达向量召回阈值、条数 <= zhaohui 时，本地直出仅写入排除最近 N 条后的编码', async () => {
     mockGlobalMeta.summaryVectorIndexModeGlobal = true;
     mockGetCurrentVectorMemoryConfig.mockReturnValue({

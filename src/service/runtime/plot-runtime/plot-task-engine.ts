@@ -591,14 +591,18 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
     if (shouldDirectRecall) {
       const summaryInfo = extractAllAmCodesFromSummaryTable_ACU(sharedContext.allTablesJson);
       const recallCount = normalizePositiveInteger_ACU(sharedContext?.plotSettings?.recallCount, 20);
-      if (summaryInfo.totalCount <= recallCount) {
-        const recentExcludeCount = Math.max(0, Math.floor(Number(sharedContext.recentFixedExcludeCount) || 0));
+      const recentExcludeCount = Math.max(0, Math.floor(Number(sharedContext.recentFixedExcludeCount) || 0));
+      const directRecallThreshold = recallCount + recentExcludeCount;
+      if (summaryInfo.totalCount <= directRecallThreshold) {
         const excludedCount = Math.min(recentExcludeCount, summaryInfo.codes.length);
         const directCodes = excludedCount > 0
           ? summaryInfo.codes.slice(0, Math.max(0, summaryInfo.codes.length - excludedCount))
           : summaryInfo.codes;
+        const thresholdLabel = recentExcludeCount > 0
+          ? `zhaohui(${recallCount}) + 固定排除(${recentExcludeCount}) = ${directRecallThreshold}`
+          : `zhaohui(${recallCount})`;
         logDebug_ACU(
-          `[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 当前纪要条数(${summaryInfo.totalCount}) <= zhaohui(${recallCount})，命中本地直出规则，跳过 AI 请求`
+          `[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 当前纪要条数(${summaryInfo.totalCount}) <= ${thresholdLabel}，命中本地直出规则，跳过 AI 请求`
           + (excludedCount > 0 ? `（已固定排除最新 ${excludedCount} 条，输出剩余 ${directCodes.length} 条编码）。` : '。'),
         );
         const rawResponse = excludedCount > 0
