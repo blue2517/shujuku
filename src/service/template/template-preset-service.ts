@@ -833,12 +833,15 @@ async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateD
     // - replace/merge：模板数据已物化进 candidateData/checkpoint，guide 只做视图投影，
     //   不得把模板数据再次写入 seedRows（否则 SQLite reseed 会重复 INSERT 同一 UNIQUE 键）。
     // - seed：模板数据保留在 guide seedRows，作为待初始化的种子数据。
+    const templateSchemaOperations = plan.sheetChanges
+        .flatMap(change => (change.kind === 'operations' && Array.isArray(change.operations) ? change.operations : []));
     const guideData = buildChatSheetGuideDataFromData_ACU(plan.candidateData, {
         preserveSeedRowsFromGuideData:
             effectiveDataMode === 'seed' && !pristineChat
                 ? getChatSheetGuideDataForIsolationKey_ACU(isolationKey)
                 : null,
         seedRowsFromTemplateObj: effectiveDataMode === 'seed' ? targetTemplateData : null,
+        ...(templateSchemaOperations.length > 0 ? { schemaOperations: templateSchemaOperations } : {}),
     });
     if (!guideData) return { saved: false, error: '无法为协调后的模板生成聊天指导表。' };
 

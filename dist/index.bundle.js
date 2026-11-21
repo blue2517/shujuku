@@ -53084,11 +53084,14 @@ $CONTENT
         // - replace/merge：模板数据已物化进 candidateData/checkpoint，guide 只做视图投影，
         //   不得把模板数据再次写入 seedRows（否则 SQLite reseed 会重复 INSERT 同一 UNIQUE 键）。
         // - seed：模板数据保留在 guide seedRows，作为待初始化的种子数据。
+        const templateSchemaOperations = plan.sheetChanges
+            .flatMap(change => (change.kind === 'operations' && Array.isArray(change.operations) ? change.operations : []));
         const guideData = buildChatSheetGuideDataFromData_ACU(plan.candidateData, {
             preserveSeedRowsFromGuideData: effectiveDataMode === 'seed' && !pristineChat
                 ? getChatSheetGuideDataForIsolationKey_ACU(isolationKey)
                 : null,
             seedRowsFromTemplateObj: effectiveDataMode === 'seed' ? targetTemplateData : null,
+            ...(templateSchemaOperations.length > 0 ? { schemaOperations: templateSchemaOperations } : {}),
         });
         if (!guideData)
             return { saved: false, error: '无法为协调后的模板生成聊天指导表。' };
@@ -83745,10 +83748,155 @@ $CONTENT
             return false;
         }
     }
+    const GUIDE_ROW_ID_ALIASES_ACU = new Set(['id', 'rowid', 'row-id', 'row_id', '行号']);
+    function isGuideRowIdAlias_ACU(value) {
+        return GUIDE_ROW_ID_ALIASES_ACU.has(String(value ?? '').trim().toLowerCase());
+    }
+    function headerArraysEqual_ACU(a, b) {
+        return a.length === b.length && a.every((item, idx) => String(item ?? '') === String(b[idx] ?? ''));
+    }
+    function literalToSeedCellValue_ACU(literal) {
+        if (!literal || typeof literal !== 'object')
+            return null;
+        if (literal.kind === 'null')
+            return null;
+        if (literal.kind === 'boolean')
+            return literal.value ? '1' : '0';
+        return literal.value !== undefined ? String(literal.value) : null;
+    }
+    function alignSeedRowsWithSchemaOperation_ACU(preservedRows, oldHeader, targetHeader, operation) {
+        const beforeColumns = operation?.beforeSchema?.columns;
+        const targetColumns = operation?.targetSchema?.columns;
+        if (!Array.isArray(beforeColumns) || !Array.isArray(targetColumns) || targetColumns.length !== targetHeader.length) {
+            return null;
+        }
+        const beforeHasRowId = isGuideRowIdAlias_ACU(beforeColumns[0]?.physicalName) || isGuideRowIdAlias_ACU(beforeColumns[0]?.displayHeader);
+        const oldHasRowId = isGuideRowIdAlias_ACU(oldHeader[0]);
+        const needsRowIdPrepend = beforeHasRowId && !oldHasRowId && oldHeader.length === beforeColumns.length - 1;
+        const normalizedOldLen = needsRowIdPrepend ? oldHeader.length + 1 : oldHeader.length;
+        if (normalizedOldLen !== beforeColumns.length) {
+            return null;
+        }
+        const beforeHeaders = Array.isArray(operation?.beforeSchema?.headers)
+            ? operation.beforeSchema.headers
+            : beforeColumns.map((col) => col?.displayHeader);
+        const alignedOldHeader = needsRowIdPrepend ? ['row_id', ...oldHeader] : oldHeader;
+        if (!alignedOldHeader.every((col, idx) => idx === 0
+            ? isGuideRowIdAlias_ACU(col) === isGuideRowIdAlias_ACU(beforeHeaders[0])
+            : String(col ?? '').trim() === String(beforeHeaders[idx] ?? '').trim())) {
+            return null;
+        }
+        const beforeIndexByPhysicalName = new Map();
+        beforeColumns.forEach((col, idx) => {
+            if (col?.physicalName) {
+                beforeIndexByPhysicalName.set(String(col.physicalName), Number.isFinite(col.index) ? col.index : idx);
+            }
+        });
+        const mappedSource = new Map();
+        if (operation.contractVersion === 2 && Array.isArray(operation.physicalColumnMappings)) {
+            operation.physicalColumnMappings.forEach((mapping) => {
+                if (mapping?.fromPhysicalName && mapping?.toPhysicalName) {
+                    mappedSource.set(String(mapping.toPhysicalName), String(mapping.fromPhysicalName));
+                }
+            });
+        }
+        const fills = (operation.contractVersion === 2 && operation.fills && typeof operation.fills === 'object')
+            ? operation.fills
+            : {};
+        return preservedRows
+            .filter((row) => Array.isArray(row))
+            .map((row) => {
+            const sourceRow = needsRowIdPrepend ? [null, ...row] : row;
+            return targetColumns.map((targetCol, targetIdx) => {
+                if (targetIdx === 0 && beforeHasRowId)
+                    return sourceRow[0] ?? null;
+                const physicalName = String(targetCol?.physicalName || '');
+                const sourceName = beforeIndexByPhysicalName.has(physicalName)
+                    ? physicalName
+                    : mappedSource.get(physicalName);
+                if (!sourceName) {
+                    const fill = fills[physicalName];
+                    return fill?.literal ? literalToSeedCellValue_ACU(fill.literal) : null;
+                }
+                const sourceIndex = beforeIndexByPhysicalName.get(sourceName);
+                return sourceIndex !== undefined && sourceIndex < sourceRow.length
+                    ? (sourceRow[sourceIndex] ?? null)
+                    : null;
+            });
+        });
+    }
+    function alignSeedRowsToTargetSheet_ACU(preservedRows, preservedSheet, targetSheet, targetHeader, schemaOperation) {
+        const oldHeader = preservedSheet?.content?.[0];
+        if (!Array.isArray(oldHeader) || oldHeader.length === 0) {
+            return ensureStableRowIdsForSeedRows_ACU(preservedRows);
+        }
+        if (schemaOperation) {
+            const migratedByOp = alignSeedRowsWithSchemaOperation_ACU(preservedRows, oldHeader, targetHeader, schemaOperation);
+            if (migratedByOp)
+                return ensureStableRowIdsForSeedRows_ACU(migratedByOp);
+        }
+        const oldHasRowId = isGuideRowIdAlias_ACU(oldHeader[0]);
+        const targetHasRowId = isGuideRowIdAlias_ACU(targetHeader[0]);
+        const needsRowIdPrepend = targetHasRowId && !oldHasRowId;
+        const normalizedOldHeader = needsRowIdPrepend ? ['row_id', ...oldHeader] : oldHeader;
+        if (!needsRowIdPrepend && headerArraysEqual_ACU(normalizedOldHeader, targetHeader)) {
+            return ensureStableRowIdsForSeedRows_ACU(preservedRows);
+        }
+        const oldDdlCols = parseDDLColumnInfos_ACU(String(preservedSheet?.sourceData?.ddl || ''));
+        const targetDdlCols = parseDDLColumnInfos_ACU(String(targetSheet?.sourceData?.ddl || ''));
+        const usePhysicalNames = !needsRowIdPrepend
+            && oldDdlCols.length === oldHeader.length
+            && targetDdlCols.length === targetHeader.length
+            && oldDdlCols.length > 0;
+        const sourceTokens = usePhysicalNames
+            ? oldDdlCols.map((col, idx) => (idx === 0 ? 'row_id' : col.sqlName))
+            : normalizedOldHeader.map((col, idx) => (idx === 0 && targetHasRowId ? 'row_id' : String(col ?? '').trim()));
+        const targetTokens = usePhysicalNames
+            ? targetDdlCols.map((col, idx) => (idx === 0 ? 'row_id' : col.sqlName))
+            : targetHeader.map((col, idx) => (idx === 0 && targetHasRowId ? 'row_id' : String(col ?? '').trim()));
+        const sourceIndexQueues = new Map();
+        sourceTokens.forEach((token, idx) => {
+            if (idx === 0 && targetHasRowId && (oldHasRowId || needsRowIdPrepend))
+                return;
+            if (!token)
+                return;
+            const queue = sourceIndexQueues.get(token);
+            if (queue)
+                queue.push(idx);
+            else
+                sourceIndexQueues.set(token, [idx]);
+        });
+        const sourceIndexMapping = targetTokens.map((token, targetIdx) => {
+            if (targetIdx === 0 && targetHasRowId) {
+                return (oldHasRowId || needsRowIdPrepend) ? 0 : -1;
+            }
+            if (!token)
+                return -1;
+            const queue = sourceIndexQueues.get(token);
+            return queue && queue.length > 0 ? queue.shift() : -1;
+        });
+        const alignedRows = preservedRows
+            .filter((row) => Array.isArray(row))
+            .map((row) => {
+            const sourceRow = needsRowIdPrepend ? [null, ...row] : row;
+            return sourceIndexMapping.map((sourceIdx) => (sourceIdx >= 0 && sourceIdx < sourceRow.length
+                ? (sourceRow[sourceIdx] ?? null)
+                : null));
+        });
+        return ensureStableRowIdsForSeedRows_ACU(alignedRows);
+    }
     // [新增] 用"当前数据"构建空白指导表：只保留表头行 + 参数（顺序由 getSortedSheetKeys_ACU 的旧逻辑决定，避免递归）
-    function buildChatSheetGuideDataFromData_ACU(dataObj, { preserveSeedRowsFromGuideData = null, seedRowsFromTemplateObj = null, orderedKeys = null } = {}) {
+    function buildChatSheetGuideDataFromData_ACU(dataObj, { preserveSeedRowsFromGuideData = null, seedRowsFromTemplateObj = null, orderedKeys = null, schemaOperations = null, } = {}) {
         if (!dataObj || typeof dataObj !== 'object')
             return null;
+        const schemaOpBySheetKey = new Map();
+        if (Array.isArray(schemaOperations)) {
+            schemaOperations.forEach((operation) => {
+                if (operation?.kind === 'sheet_schema_migrate' && operation?.sheetKey) {
+                    schemaOpBySheetKey.set(String(operation.sheetKey), operation);
+                }
+            });
+        }
         const keys = Array.isArray(orderedKeys) && orderedKeys.length
             ? orderedKeys.filter(k => typeof k === 'string' && k.startsWith('sheet_') && dataObj[k])
             : getSortedSheetKeys_ACU(dataObj, { ignoreChatGuide: true });
@@ -83770,10 +83918,14 @@ $CONTENT
                 updateConfig: s.updateConfig ? JSON.parse(JSON.stringify(s.updateConfig)) : { uiSentinel: -1, contextDepth: -1, updateFrequency: -1, batchSize: -1, skipFloors: -1, sendLatestRows: -1, groupId: -1, sendRowsSqlTemplate: '' },
                 exportConfig: ensureExportConfigDefaults_ACU(s.exportConfig ? JSON.parse(JSON.stringify(s.exportConfig)) : null, s.name || k),
             };
-            // 需求4：结构/表名/参数变更时，仅更新指导表元信息，不修改"基础数据(seedRows)"
-            const preserved = preserveSeedRowsFromGuideData?.[k]?.[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU];
+            // 需求4：结构/表名/参数变更时保留既有种子行，但若列结构发生变化必须同步对齐/裁剪列宽，
+            // 避免删除列后仍保留旧列宽的 seedRows 导致 normalizeSheetGuideRowIds_ACU 拒绝写入 guideData。
+            const preservedSheet = preserveSeedRowsFromGuideData?.[k];
+            const preserved = Array.isArray(preservedSheet?.[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU])
+                ? preservedSheet[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU]
+                : (Array.isArray(preservedSheet?._seedRows) ? preservedSheet._seedRows : null);
             if (Array.isArray(preserved)) {
-                blank[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = ensureStableRowIdsForSeedRows_ACU(preserved);
+                blank[CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU] = alignSeedRowsToTargetSheet_ACU(preserved, preservedSheet, s, headerRow, schemaOpBySheetKey.get(k) || null);
             }
             else {
                 // 需求1：首次生成指导表时，把模板预置数据写入 seedRows（仅在未能从既有指导表继承时）
@@ -152767,6 +152919,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     preserveSeedRowsFromGuideData: existingGuide,
                     seedRowsFromTemplateObj: parseTableTemplateJson_ACU({ stripSeedRows: false }),
                     orderedKeys: [...visualizer.sheetOrder],
+                    ...(schemaOperations.length > 0 ? { schemaOperations } : {}),
                 });
                 if (!guideData || !Object.keys(guideData).some(key => key.startsWith('sheet_'))) {
                     throw new Error('无法为当前模板结构生成聊天指导表。');

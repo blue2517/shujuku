@@ -871,6 +871,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         preserveSeedRowsFromGuideData: existingGuide,
         seedRowsFromTemplateObj: parseTableTemplateJson_ACU({ stripSeedRows: false }),
         orderedKeys: [...visualizer.sheetOrder],
+        ...(schemaOperations.length > 0 ? { schemaOperations } : {}),
       });
       if (!guideData || !Object.keys(guideData).some(key => key.startsWith('sheet_'))) {
         throw new Error('无法为当前模板结构生成聊天指导表。');

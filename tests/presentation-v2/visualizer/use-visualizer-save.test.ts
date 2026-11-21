@@ -935,6 +935,12 @@ describe('useVisualizerSave', () => {
     });
     expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenNthCalledWith(1, expect.objectContaining({ destructiveChangeConfirmed: false }));
     expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenNthCalledWith(2, expect.objectContaining({ destructiveChangeConfirmed: true }));
+    expect(serviceMock.buildChatSheetGuideDataFromData_ACU).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        schemaOperations: [migration],
+      }),
+    );
     expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledTimes(1);
   });
 

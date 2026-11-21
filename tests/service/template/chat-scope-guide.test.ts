@@ -616,6 +616,151 @@ describe('buildChatSheetGuideDataFromData_ACU', () => {
     expect(sheetKeys[0]).toBe('sheet_b');
     expect(sheetKeys[1]).toBe('sheet_a');
   });
+
+  it('preserveSeedRows 遇到删列并传入 schemaOperations 时，同步裁剪 seedRows 列宽并可成功写入 guideData', () => {
+    const oldDDL = `CREATE TABLE roles (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  col_1 TEXT, -- 姓名
+  col_2 TEXT, -- 是否离场
+  col_3 TEXT -- 实力
+);`;
+    const newDDL = `CREATE TABLE roles (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  col_1 TEXT, -- 姓名
+  col_3 TEXT -- 实力
+);`;
+    const preserveGuide = {
+      sheet_roles: {
+        uid: 'sheet_roles',
+        name: '重要角色表',
+        content: [['row_id', '姓名', '是否离场', '实力']],
+        sourceData: { ddl: oldDDL },
+        _seedRows: [
+          ['1', '林风', '否', '金丹'],
+          ['2', '苏晚', '是', '筑基'],
+        ],
+      },
+    };
+    const candidateData = {
+      mate: { type: 'chatSheets' },
+      sheet_roles: {
+        uid: 'sheet_roles',
+        name: '重要角色表',
+        content: [['row_id', '姓名', '实力'], ['1', '林风', '金丹']],
+        sourceData: { ddl: newDDL },
+        orderNo: 0,
+      },
+    };
+    const schemaOperations = [{
+      kind: 'sheet_schema_migrate',
+      contractVersion: 1,
+      sheetKey: 'sheet_roles',
+      beforeSchema: {
+        headers: ['row_id', '姓名', '是否离场', '实力'],
+        columns: [
+          { index: 0, physicalName: 'row_id', displayHeader: 'row_id' },
+          { index: 1, physicalName: 'col_1', displayHeader: '姓名' },
+          { index: 2, physicalName: 'col_2', displayHeader: '是否离场' },
+          { index: 3, physicalName: 'col_3', displayHeader: '实力' },
+        ],
+      },
+      targetSchema: {
+        headers: ['row_id', '姓名', '实力'],
+        columns: [
+          { index: 0, physicalName: 'row_id', displayHeader: 'row_id' },
+          { index: 1, physicalName: 'col_1', displayHeader: '姓名' },
+          { index: 2, physicalName: 'col_3', displayHeader: '实力' },
+        ],
+      },
+    }];
+
+    const result = buildChatSheetGuideDataFromData_ACU(candidateData, {
+      preserveSeedRowsFromGuideData: preserveGuide,
+      schemaOperations,
+    });
+    expect(result.sheet_roles._seedRows).toEqual([
+      ['1', '林风', '金丹'],
+      ['2', '苏晚', '筑基'],
+    ]);
+
+    const firstMsg: any = {};
+    mockGetChatFirstLayerMessage.mockReturnValue(firstMsg);
+    mockGetChatArray.mockReturnValue([firstMsg]);
+    mockGetChatSheetGuideContainer.mockReturnValue({ version: 2, tags: {} });
+    expect(setChatSheetGuideDataForIsolationKey_ACU('', result, { reason: 'drop_column' })).toBe(true);
+  });
+
+  it('preserveSeedRows 支持 V2 physicalColumnMappings 重命名与 fills 填充，且无 schemaOperations 时仍能按 DDL/表头对齐', () => {
+    const oldDDL = `CREATE TABLE roles (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  col_1 TEXT, -- 姓名
+  col_2 TEXT, -- 是否离场
+  col_3 TEXT -- 实力
+);`;
+    const newDDL = `CREATE TABLE roles (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  col_3 TEXT, -- 境界
+  col_1 TEXT, -- 姓名
+  col_4 TEXT DEFAULT '待定' -- 阵营
+);`;
+    const preserveGuide = {
+      sheet_roles: {
+        uid: 'sheet_roles',
+        name: '重要角色表',
+        content: [['row_id', '姓名', '是否离场', '实力']],
+        sourceData: { ddl: oldDDL },
+        _seedRows: [['1', '林风', '否', '金丹']],
+      },
+    };
+    const candidateData = {
+      sheet_roles: {
+        uid: 'sheet_roles',
+        name: '重要角色表',
+        content: [['row_id', '境界', '姓名', '阵营']],
+        sourceData: { ddl: newDDL },
+        orderNo: 0,
+      },
+    };
+
+    const viaRebaseOrDdl = buildChatSheetGuideDataFromData_ACU(candidateData, {
+      preserveSeedRowsFromGuideData: preserveGuide,
+    });
+    expect(viaRebaseOrDdl.sheet_roles._seedRows).toEqual([
+      ['1', '金丹', '林风', null],
+    ]);
+
+    const viaV2Op = buildChatSheetGuideDataFromData_ACU(candidateData, {
+      preserveSeedRowsFromGuideData: preserveGuide,
+      schemaOperations: [{
+        kind: 'sheet_schema_migrate',
+        contractVersion: 2,
+        sheetKey: 'sheet_roles',
+        beforeSchema: {
+          headers: ['row_id', '姓名', '是否离场', '实力'],
+          columns: [
+            { index: 0, physicalName: 'row_id', displayHeader: 'row_id' },
+            { index: 1, physicalName: 'col_1', displayHeader: '姓名' },
+            { index: 2, physicalName: 'col_2', displayHeader: '是否离场' },
+            { index: 3, physicalName: 'col_3_old', displayHeader: '实力' },
+          ],
+        },
+        targetSchema: {
+          headers: ['row_id', '境界', '姓名', '阵营'],
+          columns: [
+            { index: 0, physicalName: 'row_id', displayHeader: 'row_id' },
+            { index: 1, physicalName: 'col_3_new', displayHeader: '境界' },
+            { index: 2, physicalName: 'col_1', displayHeader: '姓名' },
+            { index: 3, physicalName: 'col_4', displayHeader: '阵营' },
+          ],
+        },
+        physicalColumnMappings: [{ fromPhysicalName: 'col_3_old', toPhysicalName: 'col_3_new' }],
+        fills: { col_4: { kind: 'ddl_literal_default', literal: { kind: 'string', value: '待定', sql: "'待定'" } } },
+      }],
+    });
+    expect(viaV2Op.sheet_roles._seedRows).toEqual([
+      ['1', '金丹', '林风', '待定'],
+    ]);
+  });
 });
 
 // ═══ buildChatSheetGuideDataFromTemplateObj_ACU ═══
